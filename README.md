@@ -8,9 +8,10 @@ The goal is high ease of use and reusable protocol foundations — not just raw
 sockets. Wire-format codecs live in gnety; protocol state machines live in the
 protocol libraries built on top.
 
-> Status: **development snapshot (untagged)** — TCP/UDP/TLS/WS/WSS servers,
-> pipeline middleware, frame + CoAP codecs, sessions, request/response correlation
-> and heartbeats. MQTT codec, DTLS and client connector are on the roadmap.
+> Status: **development snapshot (untagged)** — TCP/UDP/TLS/WS/WSS/DTLS servers and
+> clients, pipeline middleware, frame + CoAP codecs, sessions, request/response
+> correlation and heartbeats. MQTT codec and metrics hooks are on the roadmap;
+> the HTTP/WebSocket codec packages are placeholders.
 > No tags are published until a stable release; use commit pseudo-versions.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
 
