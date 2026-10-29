@@ -58,6 +58,11 @@ type Config struct {
 	HeartbeatTimeout time.Duration
 	// Heartbeat builds the heartbeat message (required when HeartbeatInterval > 0).
 	Heartbeat func(*Session) any
+	// RawHandler, when set, bypasses codec/session handling and receives the
+	// established stream connection directly. Used by protocol libraries that
+	// own their framing/state machine (e.g. MQTT broker). The handler must
+	// return when the connection closes; the server tracks and closes it.
+	RawHandler func(net.Conn)
 }
 
 // Server is a TCP or UDP transport with codec, sessions and lifecycle hooks.
@@ -80,8 +85,8 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	switch cfg.Network {
 	case "tcp", "tcp-tls", "ws", "wss":
-		if cfg.Codec == nil {
-			return nil, errors.New("gnety: stream network requires Codec")
+		if cfg.Codec == nil && cfg.RawHandler == nil {
+			return nil, errors.New("gnety: stream network requires Codec or RawHandler")
 		}
 		if (cfg.Network == "tcp-tls" || cfg.Network == "wss") && (cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
 			return nil, errors.New("gnety: TLS requires CertFile and KeyFile")
@@ -89,6 +94,9 @@ func New(cfg Config) (*Server, error) {
 	case "udp":
 		if cfg.DatagramCodec == nil {
 			return nil, errors.New("gnety: UDP requires DatagramCodec")
+		}
+		if cfg.RawHandler != nil {
+			return nil, errors.New("gnety: RawHandler is not supported for UDP")
 		}
 	default:
 		return nil, fmt.Errorf("gnety: unsupported network %q", cfg.Network)
@@ -290,6 +298,30 @@ func (s *Server) wsHandler() http.Handler {
 		}
 		c.SetReadLimit(limit)
 		conn := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+		s.mu.Lock()
+		select {
+		case <-s.done:
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+		}
+		s.conns[conn] = struct{}{}
+		s.mu.Unlock()
+		if s.cfg.RawHandler != nil {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				defer func() {
+					_ = conn.Close()
+					s.mu.Lock()
+					delete(s.conns, conn)
+					s.mu.Unlock()
+				}()
+				s.cfg.RawHandler(conn)
+			}()
+			return
+		}
 		sess := s.newSession(conn)
 		s.addSession(sess)
 		s.wg.Add(1)
@@ -349,6 +381,20 @@ func (s *Server) acceptTCP() {
 		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
+		if s.cfg.RawHandler != nil {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				defer func() {
+					_ = conn.Close()
+					s.mu.Lock()
+					delete(s.conns, conn)
+					s.mu.Unlock()
+				}()
+				s.cfg.RawHandler(conn)
+			}()
+			continue
+		}
 		sess := s.newSession(conn)
 		s.addSession(sess)
 		s.wg.Add(1)

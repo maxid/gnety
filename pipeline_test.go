@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"testing"
@@ -94,4 +95,41 @@ func TestBroadcast(t *testing.T) {
 		}
 	}
 	_ = slog.Default()
+}
+
+func TestRawHandlerTCP(t *testing.T) {
+	srv, err := New(Config{
+		Network: "tcp", Addr: "127.0.0.1:0",
+		RawHandler: func(conn net.Conn) {
+			defer conn.Close()
+			buf := make([]byte, 4)
+			if _, err := io.ReadFull(conn, buf); err != nil {
+				return
+			}
+			_, _ = conn.Write(buf)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop(context.Background())
+	conn, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte("raw!")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "raw!" {
+		t.Fatalf("raw echo = %q", buf)
+	}
 }
