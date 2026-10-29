@@ -30,8 +30,7 @@ type DatagramCodec interface {
 }
 
 // LengthFieldCodec encodes []byte payloads with a big-endian length prefix.
-// The reference implementation mirrors the Java xdmp-netty length-field decoder
-// in its simplest form (length prefix + payload).
+// The format is a simple big-endian length prefix followed by the payload.
 type LengthFieldCodec struct {
 	MaxFrameSize int
 }

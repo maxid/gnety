@@ -2,10 +2,9 @@
 
 ## Why a separate library
 
-XDMP needs to support custom device protocols over TCP and UDP (ETing, JT808-like,
-vendor TCP, UDP datagram devices). The Java platform has `xdmp-netty` +
-`xdmp-netty-protocol` with length-field/delimiter framing, sessions, request
-correlation and annotation dispatch. Go's ecosystem offers:
+Applications often need custom device protocols over TCP and UDP (vendor
+binary protocols, telemetry devices, UDP datagrams) with framing, sessions and
+request correlation. Go's ecosystem offers:
 
 - `net` — correct, simple, goroutine-per-connection; no framing/session model;
 - `gnet` — fast event loop; no framing/session/handler model;
@@ -39,7 +38,7 @@ Server
 - No built-in TLS/WebSocket yet (roadmap; `tls.Listener` can be added behind an
   option without breaking the API).
 
-## Roadmap alignment with Java xdmp-netty
+## Roadmap alignment
 
 1. v0.2: request/reply correlation (`RequestKeyPolicy` equivalent), heartbeat
    API, metrics hooks, TLS.
@@ -47,4 +46,4 @@ Server
    stdlib/gnet.
 3. v0.4: advanced framing (magic number, dynamic length field, endianness,
    BCD/GBK helpers), client (connector) and reconnection.
-4. v1.0: API stability + conformance/soak tests with the XDMP hub.
+4. v1.0: API stability, conformance and soak tests.
