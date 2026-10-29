@@ -8,7 +8,7 @@ protocol state machines and no business semantics.**
 ```
 codec/
   mqtt/       MQTT 3.1.1/5 packet encode/decode (CONNECT/PUBLISH/SUBSCRIBE/...)
-  coap/       CoAP message/option encode/decode
+  coap/       CoAP message/option encode/decode  [implemented]
   http/       HTTP/1.1 request/response codec
   websocket/  WebSocket frame codec (when not using net/http)
 ```

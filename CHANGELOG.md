@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.3.0-dev.1] - 2026-10-29
+
+- TLS/WebSocket/WSS listeners (`tcp-tls`, `ws`, `wss`) with path/subprotocol/TLS options.
+- `RawHandler` escape hatch for protocol libraries that own framing/state machines.
+- Pipeline middleware (`Chain`/`Recover`), `Broadcast`, line/fixed-length codecs.
+- `codec/coap` wire-format codec (RFC 7252) and protocol codec package layout.
+
+
 ## [0.2.2] - 2026-10-29
 
 - Fix accept-vs-stop race: reject connections accepted after shutdown, so Stop
