@@ -5,6 +5,9 @@
 - [x] Length-field (u32 BE) and delimiter codecs
 - [x] Request/response correlation (`RequestKeyPolicy`)
 - [x] Heartbeat messages and heartbeat/idle timeouts
+- [x] Pipeline middleware (Chain/Recover) and Broadcast
+- [x] Line/Fixed-length frame codecs
+- [ ] Protocol codec kit (HTTP/1.1, WebSocket, MQTT, CoAP; wire format)
 - [ ] Metrics hooks
 - [ ] TLS listener / WebSocket transport
 - [ ] Optional gnet backend + benchmarks

@@ -198,6 +198,79 @@ func (c DelimiterCodec) Encode(w io.Writer, msg any) error {
 	return err
 }
 
+// LineCodec splits frames by newline (\n); a trailing \r is trimmed.
+type LineCodec struct {
+	MaxFrameSize int
+}
+
+// Decode reads one line.
+func (c LineCodec) Decode(r *bufio.Reader) (any, error) {
+	max := c.MaxFrameSize
+	if max <= 0 {
+		max = 4 << 20
+	}
+	var out []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b == '\n' {
+			if n := len(out); n > 0 && out[n-1] == '\r' {
+				out = out[:n-1]
+			}
+			return out, nil
+		}
+		out = append(out, b)
+		if len(out) > max {
+			return nil, ErrFrameTooLarge
+		}
+	}
+}
+
+// Encode writes payload followed by a newline.
+func (c LineCodec) Encode(w io.Writer, msg any) error {
+	b, ok := msg.([]byte)
+	if !ok {
+		return fmt.Errorf("gnety: LineCodec expects []byte, got %T", msg)
+	}
+	if _, err := w.Write(b); err != nil {
+		return err
+	}
+	_, err := w.Write([]byte{'\n'})
+	return err
+}
+
+// FixedLengthCodec reads/writes fixed-size frames.
+type FixedLengthCodec struct {
+	Size int
+}
+
+// Decode reads exactly Size bytes.
+func (c FixedLengthCodec) Decode(r *bufio.Reader) (any, error) {
+	if c.Size <= 0 {
+		return nil, ErrFrameTooLarge
+	}
+	buf := make([]byte, c.Size)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// Encode writes exactly Size bytes.
+func (c FixedLengthCodec) Encode(w io.Writer, msg any) error {
+	b, ok := msg.([]byte)
+	if !ok {
+		return fmt.Errorf("gnety: FixedLengthCodec expects []byte, got %T", msg)
+	}
+	if len(b) != c.Size {
+		return fmt.Errorf("gnety: frame size %d, want %d", len(b), c.Size)
+	}
+	_, err := w.Write(b)
+	return err
+}
+
 // BytesDatagramCodec is a passthrough datagram codec.
 type BytesDatagramCodec struct{}
 

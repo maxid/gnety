@@ -1,42 +1,54 @@
 # gnety
 
-A small **TCP/UDP transport framework for custom device protocols** in Go.
-It sits between the standard library / `gnet` (raw transports) and application
-protocols: framing codecs, sessions, lifecycle handlers, idle timeouts and
-graceful shutdown.
+A composable **network application framework** for Go: server/client bootstrap,
+TCP/UDP/TLS/WebSocket transports, handler pipeline, framing codecs and a
+**protocol codec kit**.
 
-> Status: **v0.2.2** — TCP/UDP servers, codecs, sessions, request/response correlation,
-> heartbeats, idle timeout and graceful shutdown.
+The goal is high ease of use and reusable protocol foundations — not just raw
+sockets. Wire-format codecs live in gnety; protocol state machines live in the
+protocol libraries built on top.
+
+> Status: **development** — TCP/UDP servers, pipeline middleware, frame codecs,
+> sessions, request/response correlation, heartbeats and graceful shutdown.
+> Protocol codec kit, TLS/WebSocket/DTLS and client connector are on the roadmap.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Positioning
 
-gnety is a **transport layer**: TCP/UDP (and future TLS/WebSocket/DTLS) listeners
-and connectors, framing codecs, sessions, lifecycle, idle/heartbeat and
-request/response correlation.
+gnety is a **framework**, positioned by ease of use and protocol foundations:
 
-- It contains **no protocol semantics** (no MQTT, CoAP or LwM2M).
-- Protocol libraries (MQTT/CoAP/LwM2M implementations) may depend on gnety for transport.
+| gnety provides | Protocol libraries provide |
+|---|---|
+| server/client bootstrap and lifecycle | MQTT QoS/retained/session state machine |
+| handler pipeline + middleware | CoAP observe/block-wise state machine |
+| TCP/UDP/TLS/WebSocket/DTLS transports | LwM2M registration/observe state machine |
+| framing codecs (length, delimiter, line, fixed, custom) | device auth, TSL, business rules |
+| protocol codec kit (wire format: HTTP/1.1, WebSocket, MQTT, CoAP, ... roadmap) | product semantics |
+| sessions, heartbeat/idle, request/response correlation | — |
+| metrics hooks, broadcast, test utilities | — |
+
+Rules:
+
+- Wire-format codecs belong to gnety (reusable across applications).
+- Protocol state machines and business semantics belong to protocol libraries
+  built on gnety.
 - gnety must never import a protocol library.
 
 ## Scope
 
-**In scope**
+**Planned / in progress**
 
-- custom binary/text protocols over **TCP** (length-field, delimiter, custom codecs)
-- **UDP** datagram servers (session per peer)
-- session identity/attributes, lifecycle hooks, idle timeout, graceful stop
-- request/response correlation via a pluggable `RequestKeyPolicy`
-- heartbeat messages and heartbeat/idle timeouts
-- configurable length-field framing (magic, offset, size, endianness) and BCD helpers
-- a stable base for future TLS and event-loop backends
+- server + client bootstrap, reconnect and backpressure
+- composable pipeline/middleware (`Chain`, `Recover`, ...)
+- TLS / WebSocket / WSS / DTLS transports
+- protocol codec kit: HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
+- metrics hooks, event-loop backend option
+- broadcast and test utilities
 
 **Out of scope**
 
-- MQTT — use [gmqx](https://github.com/maxid/gmqx)
-- HTTP/WebSocket — use `net/http`
-- business semantics (device auth, TSL, presence) — belongs to the application
-- Netty-style annotations/pipelines — Go code is explicit
+- protocol state machines and business semantics (MQTT broker logic, LwM2M registry, CoAP observe)
+- annotation/reflection magic; Go-idiomatic explicit pipelines
 
 ## Quick start (TCP echo)
 
@@ -76,6 +88,23 @@ srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: codec,
 
 // inside a handler:
 resp, err := session.Request(ctx, request)
+```
+
+Pipeline:
+
+```go
+handler := gnety.Chain(baseHandler,
+    gnety.Recover(logger),
+    myAuthMiddleware,
+    myMetricsMiddleware,
+)
+srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: codec, Handler: handler})
+```
+
+Broadcast:
+
+```go
+n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
 
 ## Design choices
