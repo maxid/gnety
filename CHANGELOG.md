@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+- Client connector for TCP/UDP/TCP-TLS with Codec/DatagramCodec.
+
+
 ## [0.3.0-dev.1] - 2026-10-29
 
 - TLS/WebSocket/WSS listeners (`tcp-tls`, `ws`, `wss`) with path/subprotocol/TLS options.

@@ -14,5 +14,6 @@
 - [ ] Optional gnet backend + benchmarks
 - [x] Configurable length-field framing (magic/offset/size/endian) and BCD helpers
 - [ ] GBK/GB18030 helpers
-- [ ] Client connector + reconnect
+- [x] Client connector (TCP/UDP/TCP-TLS)
+- [ ] Client reconnect/backpressure
 - [ ] v1.0 API stabilization

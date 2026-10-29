@@ -39,7 +39,7 @@ Rules:
 
 **Planned / in progress**
 
-- server + client bootstrap, reconnect and backpressure
+- server bootstrap (done); client connector (TCP/UDP/TCP-TLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
 - TLS / WebSocket / WSS (done); DTLS (planned)
 - protocol codec kit skeleton (`codec/`): HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
