@@ -39,6 +39,7 @@ const (
 
 // Response codes.
 const (
+	CodeContinue            Code = 95  // 2.31 Continue
 	CodeCreated             Code = 65  // 2.01
 	CodeDeleted             Code = 66  // 2.02
 	CodeValid               Code = 67  // 2.03
