@@ -31,8 +31,8 @@ Server
   `IdleTimeout`; `Session.Send` encodes under a write mutex.
 - Pipeline: `Middleware` + `Chain` wrap handlers (outermost first); `Recover`
   converts panics into session close + log.
-- Codec kit: frame codecs today; protocol codecs (HTTP/1.1, WebSocket, MQTT,
-  CoAP) are planned as subpackages with wire-format-only APIs.
+- Codec kit: frame codecs today; protocol codecs live in `codec/<protocol>`
+  subpackages with wire-format-only APIs. TLS/WebSocket/WSS servers are implemented.
 - UDP: one read loop; session keyed by remote address; `Session.Send` writes a
   datagram; optional idle cleanup.
 - Stop: closes listener/packet conn and sessions, waits with context timeout.
@@ -48,7 +48,7 @@ Server
 ## Roadmap alignment
 
 1. v0.2 (done): request/response correlation, heartbeat, advanced framing/BCD.
-2. Next: pipeline polish, TLS/WebSocket/DTLS, client connector.
+2. Next: DTLS, client connector, protocol codec implementations (`codec/mqtt`, `codec/coap`, ...).
 3. v0.3: protocol codec kit (HTTP/1.1, WebSocket, MQTT, CoAP) + metrics hooks.
 4. v0.4: optional gnet backend, benchmarks, GBK/GB18030 helpers.
 5. v1.0: API stability, conformance and soak tests.

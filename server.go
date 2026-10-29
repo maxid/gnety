@@ -3,20 +3,41 @@ package gnety
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
-// Config configures a TCP or UDP server.
+// TLSConfig configures TLS for "tcp-tls" and "wss" networks.
+type TLSConfig struct {
+	CertFile          string
+	KeyFile           string
+	CAFile            string
+	RequireClientCert bool
+}
+
+// Config configures a server.
 type Config struct {
-	// Network is "tcp" or "udp".
+	// Network is "tcp", "tcp-tls", "udp", "ws" or "wss".
 	Network string
 	// Addr is the listen address, e.g. ":9000" or "127.0.0.1:0".
 	Addr string
+	// Path is the WebSocket path (default "/").
+	Path string
+	// Subprotocol is the required WebSocket subprotocol (optional).
+	Subprotocol string
+	// TLS configures "tcp-tls"/"wss" listeners.
+	TLS TLSConfig
 	// Codec is required for TCP.
 	Codec Codec
 	// DatagramCodec is required for UDP.
@@ -48,6 +69,7 @@ type Server struct {
 	pc       net.PacketConn
 	sessions map[string]*Session
 	conns    map[net.Conn]struct{}
+	httpSrv  *http.Server
 	done     chan struct{}
 	wg       sync.WaitGroup
 	started  bool
@@ -57,9 +79,12 @@ type Server struct {
 // New validates cfg and returns a Server.
 func New(cfg Config) (*Server, error) {
 	switch cfg.Network {
-	case "tcp":
+	case "tcp", "tcp-tls", "ws", "wss":
 		if cfg.Codec == nil {
-			return nil, errors.New("gnety: TCP requires Codec")
+			return nil, errors.New("gnety: stream network requires Codec")
+		}
+		if (cfg.Network == "tcp-tls" || cfg.Network == "wss") && (cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
+			return nil, errors.New("gnety: TLS requires CertFile and KeyFile")
 		}
 	case "udp":
 		if cfg.DatagramCodec == nil {
@@ -70,6 +95,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Handler == nil {
 		cfg.Handler = HandlerFuncs{}
+	}
+	if cfg.Path == "" {
+		cfg.Path = "/"
 	}
 	return &Server{cfg: cfg, sessions: make(map[string]*Session), conns: make(map[net.Conn]struct{}), done: make(chan struct{})}, nil
 }
@@ -82,10 +110,33 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("gnety: already started")
 	}
 	var err error
-	if s.cfg.Network == "tcp" {
+	switch s.cfg.Network {
+	case "tcp":
 		s.ln, err = net.Listen("tcp", s.cfg.Addr)
-	} else {
+	case "tcp-tls":
+		var tlsCfg *tls.Config
+		tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+		if err == nil {
+			s.ln, err = tls.Listen("tcp", s.cfg.Addr, tlsCfg)
+		}
+	case "udp":
 		s.pc, err = net.ListenPacket("udp", s.cfg.Addr)
+	case "ws", "wss":
+		var ln net.Listener
+		ln, err = net.Listen("tcp", s.cfg.Addr)
+		if err == nil && s.cfg.Network == "wss" {
+			var tlsCfg *tls.Config
+			tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+			if err == nil {
+				ln = tls.NewListener(ln, tlsCfg)
+			} else {
+				_ = ln.Close()
+			}
+		}
+		if err == nil {
+			s.ln = ln
+			s.httpSrv = &http.Server{Handler: s.wsHandler(), ReadHeaderTimeout: 10 * time.Second}
+		}
 	}
 	if err != nil {
 		s.mu.Unlock()
@@ -94,16 +145,23 @@ func (s *Server) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
-	if s.cfg.Network == "tcp" {
+	switch s.cfg.Network {
+	case "tcp", "tcp-tls":
 		s.wg.Add(1)
 		go s.acceptTCP()
-	} else {
+	case "udp":
 		s.wg.Add(1)
 		go s.readUDP()
 		if s.cfg.IdleTimeout > 0 {
 			s.wg.Add(1)
 			go s.cleanupUDP()
 		}
+	case "ws", "wss":
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			_ = s.httpSrv.Serve(s.ln)
+		}()
 	}
 	go func() {
 		select {
@@ -150,6 +208,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.pc != nil {
 		_ = s.pc.Close()
 	}
+	httpSrv := s.httpSrv
 	sessions := make([]*Session, 0, len(s.sessions))
 	for _, sess := range s.sessions {
 		sessions = append(sessions, sess)
@@ -160,6 +219,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 
+	if httpSrv != nil {
+		_ = httpSrv.Close()
+	}
 	for _, sess := range sessions {
 		_ = sess.Close()
 	}
@@ -176,6 +238,63 @@ func (s *Server) Stop(ctx context.Context) error {
 		return errors.New("gnety: stop timeout")
 	}
 	return nil
+}
+
+func loadTLSConfig(cfg TLSConfig) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("gnety: load TLS key pair: %w", err)
+	}
+	out := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("gnety: read TLS CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, errors.New("gnety: invalid TLS CA PEM")
+		}
+		out.ClientCAs = pool
+		if cfg.RequireClientCert {
+			out.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) wsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != s.cfg.Path {
+			http.NotFound(w, r)
+			return
+		}
+		if s.cfg.Subprotocol != "" {
+			got := strings.ToLower(r.Header.Get("Sec-WebSocket-Protocol"))
+			if !strings.Contains(got, strings.ToLower(s.cfg.Subprotocol)) {
+				http.Error(w, "missing WebSocket subprotocol", http.StatusBadRequest)
+				return
+			}
+		}
+		opts := &websocket.AcceptOptions{InsecureSkipVerify: true}
+		if s.cfg.Subprotocol != "" {
+			opts.Subprotocols = []string{s.cfg.Subprotocol}
+		}
+		c, err := websocket.Accept(w, r, opts)
+		if err != nil {
+			return
+		}
+		limit := int64(s.cfg.MaxFrameSize)
+		if limit <= 0 {
+			limit = 4 << 20
+		}
+		c.SetReadLimit(limit)
+		conn := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+		sess := s.newSession(conn)
+		s.addSession(sess)
+		s.wg.Add(1)
+		go s.serveTCP(sess)
+	})
 }
 
 func (s *Server) addSession(sess *Session) {

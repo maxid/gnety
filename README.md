@@ -8,9 +8,9 @@ The goal is high ease of use and reusable protocol foundations — not just raw
 sockets. Wire-format codecs live in gnety; protocol state machines live in the
 protocol libraries built on top.
 
-> Status: **development** — TCP/UDP servers, pipeline middleware, frame codecs,
-> sessions, request/response correlation, heartbeats and graceful shutdown.
-> Protocol codec kit, TLS/WebSocket/DTLS and client connector are on the roadmap.
+> Status: **development** — TCP/UDP/TLS/WS/WSS servers, pipeline middleware,
+> frame codecs, sessions, request/response correlation, heartbeats and graceful
+> shutdown. Protocol codec kit, DTLS and client connector are on the roadmap.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Positioning
@@ -40,8 +40,8 @@ Rules:
 
 - server + client bootstrap, reconnect and backpressure
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
-- TLS / WebSocket / WSS / DTLS transports
-- protocol codec kit: HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
+- TLS / WebSocket / WSS (done); DTLS (planned)
+- protocol codec kit skeleton (`codec/`): HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
 - metrics hooks, event-loop backend option
 - broadcast and test utilities
 
@@ -73,6 +73,20 @@ srv, _ := gnety.New(gnety.Config{
     Addr:          ":9001",
     DatagramCodec: gnety.BytesDatagramCodec{},
     Handler:       gnety.HandlerFuncs{Message: func(s *gnety.Session, msg any) { _ = s.Send(msg) }},
+})
+```
+
+TLS / WebSocket:
+
+```go
+// TLS
+srv, _ := gnety.New(gnety.Config{
+    Network: "tcp-tls", Addr: ":9443", Codec: codec,
+    TLS: gnety.TLSConfig{CertFile: "cert.pem", KeyFile: "key.pem"},
+})
+// WebSocket
+srv, _ = gnety.New(gnety.Config{
+    Network: "ws", Addr: ":9002", Path: "/echo", Subprotocol: "gnety", Codec: codec,
 })
 ```
 

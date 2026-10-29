@@ -7,9 +7,10 @@
 - [x] Heartbeat messages and heartbeat/idle timeouts
 - [x] Pipeline middleware (Chain/Recover) and Broadcast
 - [x] Line/Fixed-length frame codecs
-- [ ] Protocol codec kit (HTTP/1.1, WebSocket, MQTT, CoAP; wire format)
+- [ ] Protocol codec kit: package skeleton created; MQTT/CoAP/HTTP/WebSocket wire formats next
 - [ ] Metrics hooks
-- [ ] TLS listener / WebSocket transport
+- [x] TLS / WebSocket / WSS listeners
+- [ ] DTLS transport
 - [ ] Optional gnet backend + benchmarks
 - [x] Configurable length-field framing (magic/offset/size/endian) and BCD helpers
 - [ ] GBK/GB18030 helpers
