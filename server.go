@@ -173,6 +173,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(5 * time.Second):
+		return errors.New("gnety: stop timeout")
 	}
 	return nil
 }
@@ -220,6 +221,13 @@ func (s *Server) acceptTCP() {
 			continue
 		}
 		s.mu.Lock()
+		select {
+		case <-s.done:
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 		sess := s.newSession(conn)

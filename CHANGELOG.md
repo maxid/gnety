@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-29
+
+- Fix accept-vs-stop race: reject connections accepted after shutdown, so Stop
+  cannot wait on an untracked session.
+
+
 ## [0.2.1] - 2026-10-29
 
 - Fix shutdown race: track accepted connections and close them on Stop so a
