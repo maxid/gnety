@@ -155,3 +155,40 @@ func TestWebSocketSubprotocolRequired(t *testing.T) {
 		t.Fatal("expected dial failure without subprotocol")
 	}
 }
+
+func TestDTLSEcho(t *testing.T) {
+	certFile, keyFile := testCert(t)
+	srv, err := New(Config{
+		Network: "dtls", Addr: "127.0.0.1:0",
+		DatagramCodec: BytesDatagramCodec{},
+		TLS:           TLSConfig{CertFile: certFile, KeyFile: keyFile},
+		Handler: HandlerFuncs{Message: func(s *Session, msg any) {
+			_ = s.Send(msg)
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop(context.Background())
+
+	cli, err := Dial(context.Background(), ClientConfig{
+		Network: "dtls", Addr: srv.Addr(), DatagramCodec: BytesDatagramCodec{},
+		TLS: TLSConfig{CAFile: certFile},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := cli.Send([]byte("dtls")); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := cli.Receive(ctx)
+	if err != nil || string(msg.([]byte)) != "dtls" {
+		t.Fatalf("msg=%v err=%v", msg, err)
+	}
+}

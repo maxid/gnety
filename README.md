@@ -41,7 +41,7 @@ Rules:
 
 - server bootstrap (done); client connector (TCP/UDP/TCP-TLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
-- TLS / WebSocket / WSS (done); DTLS (planned)
+- TLS / WebSocket / WSS / DTLS (server + client)
 - protocol codec kit skeleton (`codec/`): HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
 - metrics hooks, event-loop backend option
 - broadcast and test utilities

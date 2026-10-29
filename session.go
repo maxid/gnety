@@ -77,8 +77,9 @@ type Session struct {
 	ID         string
 	RemoteAddr net.Addr
 
-	srv  *Server
-	conn net.Conn
+	srv      *Server
+	conn     net.Conn
+	datagram bool
 
 	writeMu sync.Mutex
 	attrs   sync.Map
@@ -105,6 +106,17 @@ func (s *Session) Send(msg any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if s.conn != nil {
+		if s.datagram {
+			if s.srv.cfg.DatagramCodec == nil {
+				return errors.New("gnety: no datagram codec configured")
+			}
+			raw, err := s.srv.cfg.DatagramCodec.Encode(msg)
+			if err != nil {
+				return err
+			}
+			_, err = s.conn.Write(raw)
+			return err
+		}
 		var buf bytes.Buffer
 		if s.srv.cfg.Codec == nil {
 			return errors.New("gnety: no TCP codec configured")

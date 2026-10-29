@@ -10,7 +10,7 @@
 - [ ] Protocol codec kit: package skeleton created; MQTT/CoAP/HTTP/WebSocket wire formats next
 - [ ] Metrics hooks
 - [x] TLS / WebSocket / WSS listeners
-- [ ] DTLS transport
+- [x] DTLS transport (server/client)
 - [ ] Optional gnet backend + benchmarks
 - [x] Configurable length-field framing (magic/offset/size/endian) and BCD helpers
 - [ ] GBK/GB18030 helpers

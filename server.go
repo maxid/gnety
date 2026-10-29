@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/pion/dtls/v2"
 )
 
 // TLSConfig configures TLS for "tcp-tls" and "wss" networks.
@@ -98,6 +99,13 @@ func New(cfg Config) (*Server, error) {
 		if cfg.RawHandler != nil {
 			return nil, errors.New("gnety: RawHandler is not supported for UDP")
 		}
+	case "dtls":
+		if cfg.DatagramCodec == nil {
+			return nil, errors.New("gnety: DTLS requires DatagramCodec")
+		}
+		if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
+			return nil, errors.New("gnety: DTLS requires CertFile and KeyFile")
+		}
 	default:
 		return nil, fmt.Errorf("gnety: unsupported network %q", cfg.Network)
 	}
@@ -129,6 +137,16 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	case "udp":
 		s.pc, err = net.ListenPacket("udp", s.cfg.Addr)
+	case "dtls":
+		var laddr *net.UDPAddr
+		laddr, err = net.ResolveUDPAddr("udp", s.cfg.Addr)
+		if err == nil {
+			var dtlsCfg *dtls.Config
+			dtlsCfg, err = loadDTLSConfig(s.cfg.TLS, false, s.cfg.Addr)
+			if err == nil {
+				s.ln, err = dtls.Listen("udp", laddr, dtlsCfg)
+			}
+		}
 	case "ws", "wss":
 		var ln net.Listener
 		ln, err = net.Listen("tcp", s.cfg.Addr)
@@ -157,6 +175,9 @@ func (s *Server) Start(ctx context.Context) error {
 	case "tcp", "tcp-tls":
 		s.wg.Add(1)
 		go s.acceptTCP()
+	case "dtls":
+		s.wg.Add(1)
+		go s.acceptDTLS()
 	case "udp":
 		s.wg.Add(1)
 		go s.readUDP()
@@ -269,6 +290,113 @@ func loadTLSConfig(cfg TLSConfig) (*tls.Config, error) {
 		}
 	}
 	return out, nil
+}
+
+func loadDTLSConfig(cfg TLSConfig, client bool, addr string) (*dtls.Config, error) {
+	out := &dtls.Config{}
+	if cfg.CertFile != "" || cfg.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("gnety: load DTLS key pair: %w", err)
+		}
+		out.Certificates = []tls.Certificate{cert}
+	}
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("gnety: read DTLS CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, errors.New("gnety: invalid DTLS CA PEM")
+		}
+		if client {
+			out.RootCAs = pool
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				out.ServerName = host
+			}
+		} else {
+			out.ClientCAs = pool
+			if cfg.RequireClientCert {
+				out.ClientAuth = dtls.RequireAndVerifyClientCert
+			}
+		}
+	}
+	if client && cfg.CAFile == "" {
+		out.InsecureSkipVerify = true // explicit dev-only fallback
+	}
+	return out, nil
+}
+
+func (s *Server) acceptDTLS() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.ln.Accept()
+		if err != nil {
+			select {
+			case <-s.done:
+				return
+			default:
+			}
+			continue
+		}
+		s.mu.Lock()
+		select {
+		case <-s.done:
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+		}
+		s.conns[conn] = struct{}{}
+		s.mu.Unlock()
+		sess := s.newDatagramSession(conn)
+		s.addSession(sess)
+		s.wg.Add(1)
+		go s.serveDatagram(sess)
+	}
+}
+
+func (s *Server) newDatagramSession(conn net.Conn) *Session {
+	sess := s.newSession(conn)
+	sess.datagram = true
+	return sess
+}
+
+func (s *Server) serveDatagram(sess *Session) {
+	defer s.wg.Done()
+	var closeErr error
+	defer func() {
+		_ = sess.conn.Close()
+		s.mu.Lock()
+		delete(s.conns, sess.conn)
+		s.mu.Unlock()
+		s.removeSession(sess.ID)
+		sess.closeOnceWith(closeErr)
+	}()
+	size := s.cfg.MaxFrameSize
+	if size <= 0 {
+		size = 64 * 1024
+	}
+	buf := make([]byte, size)
+	for {
+		if s.cfg.IdleTimeout > 0 {
+			_ = sess.conn.SetReadDeadline(time.Now().Add(s.cfg.IdleTimeout))
+		}
+		n, err := sess.conn.Read(buf)
+		if err != nil {
+			closeErr = err
+			return
+		}
+		msg, err := s.cfg.DatagramCodec.Decode(buf[:n])
+		if err != nil {
+			continue
+		}
+		sess.touch()
+		if !sess.deliverResponse(msg) || s.cfg.DeliverResponsesToHandler {
+			s.cfg.Handler.OnMessage(sess, msg)
+		}
+	}
 }
 
 func (s *Server) wsHandler() http.Handler {

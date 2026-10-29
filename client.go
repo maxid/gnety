@@ -12,11 +12,13 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/pion/dtls/v2"
 )
 
 // ClientConfig configures a client connector.
 type ClientConfig struct {
-	Network       string // "tcp", "tcp-tls" or "udp"
+	Network       string // "tcp", "tcp-tls", "udp" or "dtls"
 	Addr          string
 	Codec         Codec
 	DatagramCodec DatagramCodec
@@ -65,6 +67,19 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 			return nil, errors.New("gnety: UDP client requires DatagramCodec")
 		}
 		conn, err = dialer.DialContext(ctx, "udp", cfg.Addr)
+	case "dtls":
+		if cfg.DatagramCodec == nil {
+			return nil, errors.New("gnety: DTLS client requires DatagramCodec")
+		}
+		var udpAddr *net.UDPAddr
+		udpAddr, err = net.ResolveUDPAddr("udp", cfg.Addr)
+		if err == nil {
+			var dtlsCfg *dtls.Config
+			dtlsCfg, err = loadDTLSConfig(cfg.TLS, true, cfg.Addr)
+			if err == nil {
+				conn, err = dtls.Dial("udp", udpAddr, dtlsCfg)
+			}
+		}
 	default:
 		return nil, fmt.Errorf("gnety: unsupported client network %q", cfg.Network)
 	}
@@ -111,7 +126,7 @@ func (c *Client) Send(msg any) error {
 	if c.conn == nil {
 		return ErrSessionClosed
 	}
-	if c.cfg.Network == "udp" {
+	if c.cfg.Network == "udp" || c.cfg.Network == "dtls" {
 		raw, err := c.cfg.DatagramCodec.Encode(msg)
 		if err != nil {
 			return err
@@ -132,7 +147,7 @@ func (c *Client) Receive(ctx context.Context) (any, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.conn.SetReadDeadline(deadline)
 	}
-	if c.cfg.Network == "udp" {
+	if c.cfg.Network == "udp" || c.cfg.Network == "dtls" {
 		buf := make([]byte, 64*1024)
 		n, err := c.conn.Read(buf)
 		if err != nil {
