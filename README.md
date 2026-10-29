@@ -5,7 +5,7 @@ It sits between the standard library / `gnet` (raw transports) and application
 protocols: framing codecs, sessions, lifecycle handlers, idle timeouts and
 graceful shutdown.
 
-> Status: **v0.2.0** — TCP/UDP servers, codecs, sessions, request/response correlation,
+> Status: **v0.2.1** — TCP/UDP servers, codecs, sessions, request/response correlation,
 > heartbeats, idle timeout and graceful shutdown.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
 

@@ -47,6 +47,7 @@ type Server struct {
 	ln       net.Listener
 	pc       net.PacketConn
 	sessions map[string]*Session
+	conns    map[net.Conn]struct{}
 	done     chan struct{}
 	wg       sync.WaitGroup
 	started  bool
@@ -70,7 +71,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Handler == nil {
 		cfg.Handler = HandlerFuncs{}
 	}
-	return &Server{cfg: cfg, sessions: make(map[string]*Session), done: make(chan struct{})}, nil
+	return &Server{cfg: cfg, sessions: make(map[string]*Session), conns: make(map[net.Conn]struct{}), done: make(chan struct{})}, nil
 }
 
 // Start starts listening. It returns once the socket is ready.
@@ -153,10 +154,17 @@ func (s *Server) Stop(ctx context.Context) error {
 	for _, sess := range s.sessions {
 		sessions = append(sessions, sess)
 	}
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
 	s.mu.Unlock()
 
 	for _, sess := range sessions {
 		_ = sess.Close()
+	}
+	for _, conn := range conns {
+		_ = conn.Close()
 	}
 	wait := make(chan struct{})
 	go func() { s.wg.Wait(); close(wait) }()
@@ -211,6 +219,9 @@ func (s *Server) acceptTCP() {
 			}
 			continue
 		}
+		s.mu.Lock()
+		s.conns[conn] = struct{}{}
+		s.mu.Unlock()
 		sess := s.newSession(conn)
 		s.addSession(sess)
 		s.wg.Add(1)
@@ -223,6 +234,9 @@ func (s *Server) serveTCP(sess *Session) {
 	var closeErr error
 	defer func() {
 		_ = sess.conn.Close()
+		s.mu.Lock()
+		delete(s.conns, sess.conn)
+		s.mu.Unlock()
 		s.removeSession(sess.ID)
 		sess.closeOnceWith(closeErr)
 	}()

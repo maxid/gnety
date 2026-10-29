@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-29
+
+- Fix shutdown race: track accepted connections and close them on Stop so a
+  connection that has not yet registered a session cannot block shutdown.
+
+
 ## [0.2.0] - 2026-10-29
 
 - Request/response correlation via pluggable RequestKeyPolicy.
