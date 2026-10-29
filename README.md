@@ -5,7 +5,8 @@ It sits between the standard library / `gnet` (raw transports) and application
 protocols: framing codecs, sessions, lifecycle handlers, idle timeouts and
 graceful shutdown.
 
-> Status: **v0.1.1** — TCP/UDP servers, codecs, sessions, handlers, idle timeout.
+> Status: **v0.2.0** — TCP/UDP servers, codecs, sessions, request/response correlation,
+> heartbeats, idle timeout and graceful shutdown.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Scope
@@ -15,7 +16,10 @@ graceful shutdown.
 - custom binary/text protocols over **TCP** (length-field, delimiter, custom codecs)
 - **UDP** datagram servers (session per peer)
 - session identity/attributes, lifecycle hooks, idle timeout, graceful stop
-- a stable base for future request/response correlation, heartbeat and TLS
+- request/response correlation via a pluggable `RequestKeyPolicy`
+- heartbeat messages and heartbeat/idle timeouts
+- configurable length-field framing (magic, offset, size, endianness) and BCD helpers
+- a stable base for future TLS and event-loop backends
 
 **Out of scope**
 
@@ -48,6 +52,20 @@ srv, _ := gnety.New(gnety.Config{
     DatagramCodec: gnety.BytesDatagramCodec{},
     Handler:       gnety.HandlerFuncs{Message: func(s *gnety.Session, msg any) { _ = s.Send(msg) }},
 })
+```
+
+Request/response:
+
+```go
+policy := gnety.RequestKeyPolicyFuncs{
+    Request:  func(msg any) (string, bool) { return keyOf(msg), true },
+    Response: func(msg any) (string, bool) { return keyOf(msg), true },
+}
+srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: codec,
+    RequestKeyPolicy: policy, Handler: handler})
+
+// inside a handler:
+resp, err := session.Request(ctx, request)
 ```
 
 ## Design choices

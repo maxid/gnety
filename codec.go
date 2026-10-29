@@ -8,6 +8,7 @@ package gnety
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -29,27 +30,88 @@ type DatagramCodec interface {
 	Encode(msg any) ([]byte, error)
 }
 
-// LengthFieldCodec encodes []byte payloads with a big-endian length prefix.
-// The format is a simple big-endian length prefix followed by the payload.
+// LengthFieldCodec encodes []byte payloads with a length prefix.
+//
+// The zero value is a 4-byte big-endian length prefix followed by the payload.
+// Optional fields cover magic headers, length-field offsets/sizes, endianness
+// and length fields that include the header bytes.
 type LengthFieldCodec struct {
-	MaxFrameSize int
+	MaxFrameSize         int
+	Magic                []byte // optional magic bytes at the start
+	LengthFieldOffset    int    // bytes before the length field (default 0)
+	LengthFieldSize      int    // 1, 2 or 4 (default 4)
+	LittleEndian         bool
+	LengthIncludesHeader bool
+}
+
+func (c LengthFieldCodec) size() int {
+	switch c.LengthFieldSize {
+	case 1, 2, 4:
+		return c.LengthFieldSize
+	default:
+		return 4
+	}
+}
+
+func (c LengthFieldCodec) order() binary.ByteOrder {
+	if c.LittleEndian {
+		return binary.LittleEndian
+	}
+	return binary.BigEndian
+}
+
+func (c LengthFieldCodec) max() int {
+	if c.MaxFrameSize > 0 {
+		return c.MaxFrameSize
+	}
+	return 4 << 20
 }
 
 // Decode reads one length-prefixed frame.
 func (c LengthFieldCodec) Decode(r *bufio.Reader) (any, error) {
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+	offset := c.LengthFieldOffset
+	if offset < len(c.Magic) {
+		return nil, fmt.Errorf("gnety: LengthFieldOffset %d smaller than magic", offset)
+	}
+	if len(c.Magic) > 0 {
+		magic := make([]byte, len(c.Magic))
+		if _, err := io.ReadFull(r, magic); err != nil {
+			return nil, err
+		}
+		if string(magic) != string(c.Magic) {
+			return nil, fmt.Errorf("gnety: magic mismatch")
+		}
+	}
+	if pad := offset - len(c.Magic); pad > 0 {
+		if _, err := io.CopyN(io.Discard, r, int64(pad)); err != nil {
+			return nil, err
+		}
+	}
+	size := c.size()
+	lenBuf := make([]byte, size)
+	if _, err := io.ReadFull(r, lenBuf); err != nil {
 		return nil, err
 	}
-	n := int(binary.BigEndian.Uint32(lenBuf[:]))
-	max := c.MaxFrameSize
-	if max <= 0 {
-		max = 4 << 20
+	var frameLen int
+	switch size {
+	case 1:
+		frameLen = int(lenBuf[0])
+	case 2:
+		frameLen = int(c.order().Uint16(lenBuf))
+	case 4:
+		frameLen = int(c.order().Uint32(lenBuf))
 	}
-	if n <= 0 || n > max {
-		return nil, fmt.Errorf("%w: %d", ErrFrameTooLarge, n)
+	payloadLen := frameLen
+	if c.LengthIncludesHeader {
+		payloadLen -= offset + size
 	}
-	buf := make([]byte, n)
+	if payloadLen <= 0 {
+		return nil, fmt.Errorf("%w: %d", ErrFrameTooLarge, frameLen)
+	}
+	if payloadLen > c.max() {
+		return nil, fmt.Errorf("%w: %d", ErrFrameTooLarge, payloadLen)
+	}
+	buf := make([]byte, payloadLen)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
 	}
@@ -62,9 +124,32 @@ func (c LengthFieldCodec) Encode(w io.Writer, msg any) error {
 	if !ok {
 		return fmt.Errorf("gnety: LengthFieldCodec expects []byte, got %T", msg)
 	}
-	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(b)))
-	if _, err := w.Write(lenBuf[:]); err != nil {
+	offset := c.LengthFieldOffset
+	if offset < len(c.Magic) {
+		return fmt.Errorf("gnety: LengthFieldOffset %d smaller than magic", offset)
+	}
+	size := c.size()
+	headerLen := offset + size
+	frameLen := len(b)
+	if c.LengthIncludesHeader {
+		frameLen += headerLen
+	}
+	var header bytes.Buffer
+	header.Write(c.Magic)
+	header.Write(make([]byte, offset-len(c.Magic)))
+	switch size {
+	case 1:
+		header.WriteByte(byte(frameLen))
+	case 2:
+		var b2 [2]byte
+		c.order().PutUint16(b2[:], uint16(frameLen))
+		header.Write(b2[:])
+	case 4:
+		var b4 [4]byte
+		c.order().PutUint32(b4[:], uint32(frameLen))
+		header.Write(b4[:])
+	}
+	if _, err := w.Write(header.Bytes()); err != nil {
 		return err
 	}
 	_, err := w.Write(b)

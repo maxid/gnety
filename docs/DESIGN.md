@@ -40,8 +40,8 @@ Server
 
 ## Roadmap alignment
 
-1. v0.2: request/reply correlation (`RequestKeyPolicy` equivalent), heartbeat
-   API, metrics hooks, TLS.
+1. v0.2 (done): request/response correlation, heartbeat API, advanced framing/BCD.
+   Next: metrics hooks, TLS.
 2. v0.3: optional gnet backend (build tag or engine option), benchmark vs
    stdlib/gnet.
 3. v0.4: advanced framing (magic number, dynamic length field, endianness,

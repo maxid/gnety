@@ -27,6 +27,16 @@ type Config struct {
 	IdleTimeout time.Duration
 	// MaxFrameSize is passed to codecs (0 = codec default).
 	MaxFrameSize int
+	// RequestKeyPolicy enables request/response correlation on sessions.
+	RequestKeyPolicy RequestKeyPolicy
+	// DeliverResponsesToHandler also forwards correlated responses to Handler.
+	DeliverResponsesToHandler bool
+	// HeartbeatInterval sends a heartbeat message when > 0.
+	HeartbeatInterval time.Duration
+	// HeartbeatTimeout closes the session when no inbound message arrives.
+	HeartbeatTimeout time.Duration
+	// Heartbeat builds the heartbeat message (required when HeartbeatInterval > 0).
+	Heartbeat func(*Session) any
 }
 
 // Server is a TCP or UDP transport with codec, sessions and lifecycle hooks.
@@ -164,6 +174,7 @@ func (s *Server) addSession(sess *Session) {
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
 	s.cfg.Handler.OnOpen(sess)
+	sess.startHeartbeat()
 }
 
 func (s *Server) removeSession(id string) *Session {
@@ -183,6 +194,7 @@ func (s *Server) removeUDP(id string) {
 func (s *Server) newSession(conn net.Conn) *Session {
 	id := fmt.Sprintf("%s#%d", conn.RemoteAddr().String(), s.seq.Add(1))
 	sess := &Session{ID: id, RemoteAddr: conn.RemoteAddr(), srv: s, conn: conn}
+	sess.init()
 	sess.touch()
 	return sess
 }
@@ -225,7 +237,9 @@ func (s *Server) serveTCP(sess *Session) {
 			return
 		}
 		sess.touch()
-		s.cfg.Handler.OnMessage(sess, msg)
+		if !sess.deliverResponse(msg) || s.cfg.DeliverResponsesToHandler {
+			s.cfg.Handler.OnMessage(sess, msg)
+		}
 	}
 }
 
@@ -253,7 +267,9 @@ func (s *Server) readUDP() {
 			continue
 		}
 		sess.touch()
-		s.cfg.Handler.OnMessage(sess, msg)
+		if !sess.deliverResponse(msg) || s.cfg.DeliverResponsesToHandler {
+			s.cfg.Handler.OnMessage(sess, msg)
+		}
 	}
 }
 
@@ -265,10 +281,12 @@ func (s *Server) udpSession(addr net.Addr) *Session {
 		return sess
 	}
 	sess := &Session{ID: id, RemoteAddr: addr, srv: s}
+	sess.init()
 	sess.touch()
 	s.sessions[id] = sess
 	s.mu.Unlock()
 	s.cfg.Handler.OnOpen(sess)
+	sess.startHeartbeat()
 	return sess
 }
 

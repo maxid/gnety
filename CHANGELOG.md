@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
+- Request/response correlation via pluggable RequestKeyPolicy.
+- Heartbeat messages, heartbeat/idle timeouts.
+- Configurable length-field codec: magic, offset, 1/2/4-byte length, endianness, header-included length.
+- BCD encode/decode helpers.
+- Tests for correlation, heartbeat, advanced framing and BCD.
+
+
 ## [0.1.1] - 2026-10-29
 
 - Documentation cleanup: product-neutral, self-contained docs.
