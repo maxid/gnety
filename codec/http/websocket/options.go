@@ -1,7 +1,9 @@
 package websocket
 
 import (
+	"bufio"
 	"errors"
+	"net"
 	"net/http"
 )
 
@@ -20,6 +22,15 @@ type Options struct {
 	AllowAnyOrigin bool
 	// MaxMessageSize limits the reassembled message; 0 uses the package default.
 	MaxMessageSize int
+	// Hijack obtains the connection during the server handshake. The default
+	// (nil) requires w to implement http.Hijacker: the library uses the writer
+	// it was given and never reaches through a wrapper. Set it when the server
+	// framework exposes the hijackable writer another way, for example:
+	//
+	//	Options{Hijack: http.NewResponseController(w).Hijack}
+	//
+	// Ignored by the client handshake, which is handed a net.Conn directly.
+	Hijack func(http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error)
 }
 
 // ValidSubprotocol reports whether s is a valid Sec-WebSocket-Protocol token.

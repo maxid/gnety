@@ -48,13 +48,9 @@ func Accept(w http.ResponseWriter, r *http.Request, opts Options) (*Conn, error)
 		return nil, err
 	}
 
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "WebSocket hijacking unsupported", http.StatusInternalServerError)
-		return nil, errors.New("gnety: WebSocket hijacking unsupported")
-	}
-	raw, rw, err := hijacker.Hijack()
+	raw, rw, err := hijackConnection(w, opts.Hijack)
 	if err != nil {
+		http.Error(w, "WebSocket hijacking unsupported", http.StatusInternalServerError)
 		return nil, err
 	}
 	if _, err := fmt.Fprintf(rw.Writer,
@@ -131,6 +127,20 @@ func ClientHandshake(raw net.Conn, location *url.URL, origin string, opts Option
 		return nil, fmt.Errorf("gnety: WebSocket subprotocol %q does not match requested %q", selected, opts.Subprotocol)
 	}
 	return newConn(raw, rw, true, opts.MaxMessageSize, opts.Subprotocol), nil
+}
+
+// hijackConnection takes the raw connection either through the caller's hook
+// or through the writer it was given. Wrappers are never unwrapped here: a
+// framework that hides the hijackable writer is expected to supply the hook.
+func hijackConnection(w http.ResponseWriter, hook func(http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error)) (net.Conn, *bufio.ReadWriter, error) {
+	if hook != nil {
+		return hook(w)
+	}
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("gnety: WebSocket hijacking unsupported")
+	}
+	return hijacker.Hijack()
 }
 
 func validOrigin(r *http.Request, patterns []string, allowAny bool) error {
