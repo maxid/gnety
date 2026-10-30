@@ -1,9 +1,15 @@
 // Package mqtt implements MQTT 3.1.1 and MQTT 5 wire-format encoding and
 // decoding.
 //
+// Two layers are available. The framing helpers (ReadPacket, WritePacket and the
+// field encoder/decoder pairs) work on a fixed-header byte and a raw body. The
+// typed layer (Decoder, Encode and the Message types) maps every control packet
+// to a struct, MQTT 5 property blocks included.
+//
 // It converts bytes to packets and packets to bytes only. Session state (QoS,
 // retained messages, subscriptions, keepalive, topic aliases) and any device or
-// product semantics belong to the protocol library built on top, never here.
+// product semantics belong to the protocol library built on top, never here. The
+// package imports only the Go standard library and codec/wire.
 package mqtt
 
 import (
