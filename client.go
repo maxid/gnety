@@ -29,6 +29,7 @@ type ClientConfig struct {
 	DatagramCodec DatagramCodec
 	TLS           TLSConfig
 	Timeout       time.Duration
+	WriteTimeout  time.Duration
 	MaxFrameSize  int // WebSocket inbound message limit (0 = 4 MiB)
 }
 
@@ -137,20 +138,24 @@ func (c *Client) Send(msg any) error {
 	if c.conn == nil {
 		return ErrSessionClosed
 	}
+	if timeout := c.cfg.WriteTimeout; timeout > 0 {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(timeout))
+	}
+	defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
 	if c.cfg.Network == "udp" || c.cfg.Network == "dtls" {
 		raw, err := c.cfg.DatagramCodec.Encode(msg)
 		if err != nil {
 			return err
 		}
 		_, err = c.conn.Write(raw)
-		return err
+		return wrapWriteError(err)
 	}
 	var buf bytes.Buffer
 	if err := c.cfg.Codec.Encode(&buf, msg); err != nil {
 		return err
 	}
 	_, err := c.conn.Write(buf.Bytes())
-	return err
+	return wrapWriteError(err)
 }
 
 // Receive reads and decodes one message.

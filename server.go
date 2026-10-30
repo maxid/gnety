@@ -25,6 +25,9 @@ type TLSConfig struct {
 	KeyFile           string
 	CAFile            string
 	RequireClientCert bool
+	// InsecureSkipVerify is only valid for DTLS clients and must be explicit.
+	// Production should provide CAFile instead.
+	InsecureSkipVerify bool
 }
 
 // Config configures a server.
@@ -57,6 +60,15 @@ type Config struct {
 	IdleTimeout time.Duration
 	// MaxFrameSize is passed to codecs (0 = codec default).
 	MaxFrameSize int
+	// MaxSessions limits concurrent connections/peers (0 = unlimited).
+	MaxSessions int
+	// MaxPendingRequests limits per-session Request correlation entries
+	// (0 = unlimited).
+	MaxPendingRequests int
+	// WriteTimeout bounds each Session/Client write (0 = no deadline).
+	WriteTimeout time.Duration
+	// ShutdownTimeout bounds Stop; 0 uses a 5s compatibility default.
+	ShutdownTimeout time.Duration
 	// RequestKeyPolicy enables request/response correlation on sessions.
 	RequestKeyPolicy RequestKeyPolicy
 	// DeliverResponsesToHandler also forwards correlated responses to Handler.
@@ -275,12 +287,16 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	wait := make(chan struct{})
 	go func() { s.wg.Wait(); close(wait) }()
+	timeout := s.cfg.ShutdownTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	select {
 	case <-wait:
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(5 * time.Second):
-		return errors.New("gnety: stop timeout")
+	case <-time.After(timeout):
+		return ErrShutdownTimeout
 	}
 	return nil
 }
@@ -339,7 +355,10 @@ func loadDTLSConfig(cfg TLSConfig, client bool, addr string) (*dtls.Config, erro
 		}
 	}
 	if client && cfg.CAFile == "" {
-		out.InsecureSkipVerify = true // explicit dev-only fallback
+		if !cfg.InsecureSkipVerify {
+			return nil, errors.New("gnety: DTLS client requires CAFile or explicit InsecureSkipVerify")
+		}
+		out.InsecureSkipVerify = true
 	}
 	return out, nil
 }
@@ -363,6 +382,11 @@ func (s *Server) acceptDTLS() {
 			_ = conn.Close()
 			return
 		default:
+		}
+		if max := s.cfg.MaxSessions; max > 0 && len(s.conns) >= max {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
 		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
@@ -442,6 +466,11 @@ func (s *Server) wsHandler() http.Handler {
 			return
 		default:
 		}
+		if max := s.cfg.MaxSessions; max > 0 && len(s.conns) >= max {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 		if s.cfg.RawHandler != nil {
@@ -513,6 +542,11 @@ func (s *Server) acceptTCP() {
 			return
 		default:
 		}
+		if max := s.cfg.MaxSessions; max > 0 && len(s.conns) >= max {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 		if s.cfg.RawHandler != nil {
@@ -583,6 +617,9 @@ func (s *Server) readUDP() {
 		}
 		data := append([]byte(nil), buf[:n]...)
 		sess := s.udpSession(addr)
+		if sess == nil {
+			continue
+		}
 		msg, err := s.cfg.DatagramCodec.Decode(data)
 		if err != nil {
 			continue
@@ -600,6 +637,10 @@ func (s *Server) udpSession(addr net.Addr) *Session {
 	if sess, ok := s.sessions[id]; ok {
 		s.mu.Unlock()
 		return sess
+	}
+	if s.cfg.MaxSessions > 0 && len(s.sessions) >= s.cfg.MaxSessions {
+		s.mu.Unlock()
+		return nil
 	}
 	sess := &Session{ID: id, RemoteAddr: addr, srv: s}
 	sess.init()

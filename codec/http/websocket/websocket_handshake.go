@@ -164,7 +164,7 @@ func acceptKey(key string) string {
 
 func hasHeaderToken(header http.Header, name, want string) bool {
 	for _, value := range header.Values(name) {
-		for _, token := range strings.Split(value, ",") {
+		for token := range strings.SplitSeq(value, ",") {
 			if strings.EqualFold(strings.TrimSpace(token), want) {
 				return true
 			}
@@ -175,7 +175,7 @@ func hasHeaderToken(header http.Header, name, want string) bool {
 
 func hasSubprotocol(header http.Header, want string) bool {
 	for _, value := range header.Values("Sec-WebSocket-Protocol") {
-		for _, offered := range strings.Split(value, ",") {
+		for offered := range strings.SplitSeq(value, ",") {
 			if strings.TrimSpace(offered) == want {
 				return true
 			}

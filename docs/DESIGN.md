@@ -40,6 +40,14 @@ Server
   datagram; optional idle cleanup.
 - Stop: closes listener/packet conn and sessions, waits with context timeout.
 
+## Limits and timeouts
+
+- `MaxSessions` is enforced at accept/WS/DTLS before a connection is tracked; UDP peers use the same cap.
+- `MaxPendingRequests` bounds per-session request correlation; over-limit returns `ErrTooManyPending`.
+- `WriteTimeout` applies to Session/Client writes; timeout returns `ErrWriteTimeout`.
+- `ShutdownTimeout` bounds Stop; timeout returns `ErrShutdownTimeout`.
+- DTLS clients must provide `CAFile` or explicitly set `TLS.InsecureSkipVerify`; production cannot silently skip verification.
+
 ## Non-goals / deliberate limits
 
 - No annotation-based dispatch, no reflection pipelines.

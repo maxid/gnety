@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+- N1 limits/timeouts: MaxSessions admission, per-session pending cap, write deadline,
+  shutdown timeout; DTLS clients require CA or explicit InsecureSkipVerify.
+
+
 - Moved RFC 6455 WebSocket handshake/frame/message/Conn into codec/http/websocket;
   transport/server/client only wire the codec. Public Config/behavior unchanged.
 

@@ -40,6 +40,7 @@ Rules:
 
 **Planned / in progress**
 
+- limits/timeouts: `MaxSessions`, `MaxPendingRequests`, `WriteTimeout`, `ShutdownTimeout`; explicit DTLS `InsecureSkipVerify`
 - server bootstrap (done); client connector (TCP/UDP/TCP-TLS/WS/WSS/DTLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
 - TLS / WebSocket / WSS / DTLS (server + client)

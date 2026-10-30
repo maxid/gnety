@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -108,6 +109,10 @@ func (s *Session) Send(msg any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if s.conn != nil {
+		if timeout := s.srv.cfg.WriteTimeout; timeout > 0 {
+			_ = s.conn.SetWriteDeadline(time.Now().Add(timeout))
+		}
+		defer func() { _ = s.conn.SetWriteDeadline(time.Time{}) }()
 		if s.datagram {
 			if s.srv.cfg.DatagramCodec == nil {
 				return errors.New("gnety: no datagram codec configured")
@@ -117,7 +122,7 @@ func (s *Session) Send(msg any) error {
 				return err
 			}
 			_, err = s.conn.Write(raw)
-			return err
+			return wrapWriteError(err)
 		}
 		var buf bytes.Buffer
 		if s.srv.cfg.Codec == nil {
@@ -127,7 +132,7 @@ func (s *Session) Send(msg any) error {
 			return err
 		}
 		_, err := s.conn.Write(buf.Bytes())
-		return err
+		return wrapWriteError(err)
 	}
 	if s.srv.pc == nil || s.srv.cfg.DatagramCodec == nil {
 		return errors.New("gnety: no UDP datagram codec configured")
@@ -137,6 +142,17 @@ func (s *Session) Send(msg any) error {
 		return err
 	}
 	_, err = s.srv.pc.WriteTo(b, s.RemoteAddr)
+	return err
+}
+
+func wrapWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("%w: %v", ErrWriteTimeout, err)
+	}
 	return err
 }
 
@@ -191,6 +207,10 @@ func (s *Session) Request(ctx context.Context, req any) (any, error) {
 	s.pendingMu.Lock()
 	if s.pending == nil {
 		s.pending = make(map[string]chan any)
+	}
+	if max := s.srv.cfg.MaxPendingRequests; max > 0 && len(s.pending) >= max {
+		s.pendingMu.Unlock()
+		return nil, ErrTooManyPending
 	}
 	if _, exists := s.pending[key]; exists {
 		s.pendingMu.Unlock()
