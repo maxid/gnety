@@ -7,6 +7,8 @@ Standard-library-only RFC 6455 WebSocket codec, layered like typical HTTP codec 
 - `message.go` (inside `websocket.go`): fragmentation, UTF-8 validation, Ping/Pong/Close, read limits.
 - `conn.go` (inside `websocket.go`): `net.Conn` adapter with `Ping`, `CloseWithStatus`, `SetReadLimit`, `Subprotocol`.
 
+The server handshake reaches the connection through `http.ResponseController`, so `Accept` also works when a middleware wrapper (or an embedding server such as Caddy) exposes the hijackable writer via `Unwrap` instead of implementing `http.Hijacker` directly.
+
 Public API:
 
 ```go
