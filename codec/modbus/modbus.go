@@ -1,10 +1,15 @@
 // Package modbus implements the Modbus TCP wire format: the MBAP header and the
 // PDU bytes that follow it.
 //
-// It converts bytes to frames and frames to bytes only. Transaction matching,
-// polling schedules, retries, exception-to-error mapping and device semantics
-// belong to the Modbus client library (gmodbus) or to the adapter built on top —
-// never here.
+// Two layers are available. Frame, Marshal, Read and Codec work on raw PDU bytes.
+// Message, DecodePDU, DecodeResponse and EncodePDU add the typed PDUs for the
+// function codes the platform uses, and TypedFrame carries one of those messages
+// through the MBAP header.
+//
+// It converts bytes to frames and messages and back only. Transaction matching,
+// polling schedules, retries, mapping an exception code to a device error and
+// device semantics belong to the Modbus client library (gmodbus) or to the
+// adapter built on top — never here.
 //
 // The frame layout is fixed by the specification:
 //
