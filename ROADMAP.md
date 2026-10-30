@@ -7,7 +7,8 @@
 - [x] Heartbeat messages and heartbeat/idle timeouts
 - [x] Pipeline middleware (Chain/Recover) and Broadcast
 - [x] Line/Fixed-length frame codecs
-- [ ] Protocol codec kit: package skeleton created; MQTT/CoAP/HTTP/WebSocket wire formats next
+- [x] Protocol codec kit: shared `codec/wire` primitives (bounded reader/writer, varint, UTF-8, chunk reassembly, error kinds)
+- [x] Protocol codec kit: MQTT, CoAP, HTTP/WebSocket and Modbus MBAP+PDU wire formats
 - [ ] Metrics hooks
 - [x] TLS / WebSocket / WSS listeners
 - [x] DTLS transport (server/client)

@@ -31,7 +31,10 @@ Server
 - Pipeline: `Middleware` + `Chain` wrap handlers (outermost first); `Recover`
   converts panics into session close + log.
 - Codec kit: frame codecs and wire-format-only protocol codecs live in
-  `codec/<protocol>`; MQTT and CoAP are implemented. TLS/WebSocket/WSS servers
+  `codec/<protocol>`, with the shared byte-level primitives (bounded readers and
+  writers, length prefixes, varints, bounded UTF-8, chunk reassembly, error
+  classification) in `codec/wire`; MQTT, CoAP and Modbus (MBAP + PDU) are
+  implemented. TLS/WebSocket/WSS servers
   and clients are implemented. WebSocket is a standard-library-only RFC 6455
   implementation inside gnety: handshake, frame codec and message/stream
   adaptation are separate stages. It supports fragmentation, control frames,

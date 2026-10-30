@@ -9,7 +9,7 @@ sockets. Wire-format codecs live in gnety; protocol state machines live in the
 protocol libraries built on top.
 
 > Status: **development snapshot (untagged)** — TCP/UDP/TLS/WS/WSS/DTLS servers and
-> clients, pipeline middleware, frame + MQTT/CoAP codecs, sessions,
+> clients, pipeline middleware, frame + MQTT/CoAP/Modbus codecs, sessions,
 > request/response correlation and heartbeats. Metrics hooks are on the roadmap;
 > the HTTP/WebSocket codec packages are placeholders.
 > No tags are published until a stable release; use commit pseudo-versions.
@@ -44,7 +44,7 @@ Rules:
 - server bootstrap (done); client connector (TCP/UDP/TCP-TLS/WS/WSS/DTLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
 - TLS / WebSocket / WSS / DTLS (server + client)
-- protocol codec kit skeleton (`codec/`): HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
+- protocol codec kit (`codec/`): shared byte primitives (`codec/wire`), HTTP/1.1, WebSocket, MQTT, CoAP, Modbus MBAP+PDU (wire format only)
 - metrics hooks, event-loop backend option
 - broadcast and test utilities
 

@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+- `codec/wire`: shared byte-level primitives for protocol codecs — bounded
+  reader/writer, length prefixes, base-128 varint, bounded UTF-8 strings, chunk
+  reassembly and classified errors (`ErrIncomplete` / `ErrMalformed` /
+  `ErrTooLarge` / `ErrUnsupported`). Decoding never allocates from an unvalidated
+  declared length and never aliases the read buffer.
+
+
+- `codec/modbus`: Modbus TCP wire format (MBAP header + PDU, function-code
+  constants, exception flag) built on `codec/wire`; polling, transaction
+  matching and exception mapping stay in the Modbus client library.
+
+
 - N1 limits/timeouts: MaxSessions admission, per-session pending cap, write deadline,
   shutdown timeout; DTLS clients require CA or explicit InsecureSkipVerify.
 
