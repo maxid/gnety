@@ -39,6 +39,12 @@ Server
   implementation inside gnety: handshake, frame codec and message/stream
   adaptation are separate stages. It supports fragmentation, control frames,
   masking, UTF-8 validation, exact subprotocols and bounded message reads.
+- Metrics: `Config.Metrics` receives session open/close/reject, message in/out
+  and write failures. Labels are coarse (transport, reason) by contract — never a
+  client ID, peer address or topic.
+- Write path: one writer at a time per session, a bounded queue of waiting
+  writers (`MaxQueuedWrites`, default 8) and `ErrWriteBusy` when it is full, so a
+  slow peer cannot grow a session's memory without bound.
 - UDP: one read loop; session keyed by remote address; `Session.Send` writes a
   datagram; optional idle cleanup.
 - Stop: closes listener/packet conn and sessions, waits with context timeout.

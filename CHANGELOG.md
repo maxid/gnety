@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+- N1 metrics and write backpressure: `Config.Metrics` receives low-cardinality
+  transport events (session open/close/reject, message in/out, write failures)
+  with `NoopMetrics` as the default; `Config.MaxQueuedWrites` bounds concurrent
+  writers per session (default 8, negative disables) and returns `ErrWriteBusy`
+  instead of queueing without bound.
+
+
 - `codec/wire`: shared byte-level primitives for protocol codecs — bounded
   reader/writer, length prefixes, base-128 varint, bounded UTF-8 strings, chunk
   reassembly and classified errors (`ErrIncomplete` / `ErrMalformed` /
