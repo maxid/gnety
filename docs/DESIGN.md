@@ -33,8 +33,8 @@ Server
 - Codec kit: frame codecs and wire-format-only protocol codecs live in
   `codec/<protocol>`, with the shared byte-level primitives (bounded readers and
   writers, length prefixes, varints, bounded UTF-8, chunk reassembly, error
-  classification) in `codec/wire`; MQTT, CoAP and Modbus (MBAP + PDU) are
-  implemented. TLS/WebSocket/WSS servers
+  classification) in `codec/wire`; MQTT, CoAP, Modbus (MBAP + PDU) and LwM2M TLV
+  are implemented. TLS/WebSocket/WSS servers
   and clients are implemented. WebSocket is a standard-library-only RFC 6455
   implementation inside gnety: handshake, frame codec and message/stream
   adaptation are separate stages. It supports fragmentation, control frames,

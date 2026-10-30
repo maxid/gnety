@@ -9,6 +9,8 @@ protocol state machines and no business semantics.**
 codec/
   mqtt/             MQTT 3.1/3.1.1/5 packet codec          [implemented]
   coap/             CoAP message/option codec             [implemented]
+  modbus/           Modbus TCP MBAP + PDU codec           [implemented]
+  tlv/              LwM2M TLV entry codec                 [implemented]
   http/             HTTP/1.1 helpers for Upgrade         [implemented]
   http/websocket/   RFC 6455 handshake/frame/message/conn [implemented]
 ```

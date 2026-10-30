@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+
+- `codec/tlv`: the OMA LwM2M TLV wire format (type nibble, 8/16-bit identifier,
+  inline and 8/16/24-bit lengths, nested object instance / multiple resource
+  entries) built on `codec/wire`. It never allocates from an unvalidated
+  declared length, bounds nesting to `MaxDepth`, rejects duplicate identifiers
+  inside one scope and treats a truncated payload as malformed, because a TLV
+  payload is a datagram. `Marshal` sorts every scope by identifier, so the same
+  tree always produces the same bytes, and neither direction retains the other
+  side's buffer. `ParseLimit` is the size-bounded entry point. The encoder is
+  byte-compatible with the implementation it replaces (`compat_test.go` keeps
+  the old one for a differential test); the LwM2M server library now delegates
+  to this package.
+
+
 - N1 metrics and write backpressure: `Config.Metrics` receives low-cardinality
   transport events (session open/close/reject, message in/out, write failures)
   with `NoopMetrics` as the default; `Config.MaxQueuedWrites` bounds concurrent
