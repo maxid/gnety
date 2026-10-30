@@ -1,57 +1,115 @@
-// Package coap implements the CoAP (RFC 7252) wire format.
+// Package coap implements the CoAP (RFC 7252) wire format: the four-byte
+// header, the token, the option stream and the payload of one datagram.
 //
-// It is a wire-format codec only: no retransmission, observe, block-wise or
-// registration state machines. Those belong to protocol libraries (gcoap,
-// glwm2m) built on gnety.
+// Two layers are available. Parse and Marshal convert a whole datagram to a
+// Message and back and have always done so. Decoder, ParseLimit and Encode add
+// the bounded and strict entry points a server wants, and the typed option
+// accessors (URIPath, ContentFormat, Block1, Observe and friends) read and
+// write the wire-faithful Option list.
+//
+// It converts bytes to messages and messages to bytes only. Retransmission,
+// message-id deduplication, exchange lifetimes, observe registries and
+// block-wise reassembly are protocol state machines: they belong to the
+// protocol libraries (gcoap, glwm2m) built on gnety, never here. The package
+// imports only the Go standard library and codec/wire.
 package coap
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"sort"
 )
 
 // Version is the CoAP version implemented by this package.
 const Version = 1
 
-// Type is the CoAP message type.
+// Type is the CoAP message type, the two-bit field in the first header byte.
 type Type uint8
 
+// CoAP message types (RFC 7252 section 3).
 const (
-	Confirmable Type = iota
-	NonConfirmable
-	Acknowledgement
-	Reset
+	// Confirmable is a message that must be acknowledged (CON).
+	Confirmable Type = 0
+	// NonConfirmable is a message that is not acknowledged (NON).
+	NonConfirmable Type = 1
+	// Acknowledgement acknowledges a confirmable message (ACK).
+	Acknowledgement Type = 2
+	// Reset rejects a message that could not be processed (RST).
+	Reset Type = 3
 )
+
+// String returns the specification abbreviation of the message type.
+func (t Type) String() string {
+	switch t {
+	case Confirmable:
+		return "CON"
+	case NonConfirmable:
+		return "NON"
+	case Acknowledgement:
+		return "ACK"
+	case Reset:
+		return "RST"
+	default:
+		return "unknown"
+	}
+}
 
 // Code is the CoAP request/response code (class<<5 | detail).
 type Code uint8
 
-// Request codes.
+// Request method codes.
 const (
-	CodeEmpty  Code = 0
-	CodeGET    Code = 1
-	CodePOST   Code = 2
-	CodePUT    Code = 3
+	// CodeEmpty is the empty code, 0.00. ACK and RST carry it, and so does a
+	// CoAP ping.
+	CodeEmpty Code = 0
+	// CodeGET is GET, 0.01.
+	CodeGET Code = 1
+	// CodePOST is POST, 0.02.
+	CodePOST Code = 2
+	// CodePUT is PUT, 0.03.
+	CodePUT Code = 3
+	// CodeDELETE is DELETE, 0.04.
 	CodeDELETE Code = 4
+	// CodeFETCH is FETCH, 0.05 (RFC 8132).
+	CodeFETCH Code = 5
+	// CodePATCH is PATCH, 0.06 (RFC 8132).
+	CodePATCH Code = 6
 )
 
-// Response codes.
+// Response codes a server commonly sends.
 const (
-	CodeContinue            Code = 95  // 2.31 Continue
-	CodeCreated             Code = 65  // 2.01
-	CodeDeleted             Code = 66  // 2.02
-	CodeValid               Code = 67  // 2.03
-	CodeChanged             Code = 68  // 2.04
-	CodeContent             Code = 69  // 2.05
-	CodeBadRequest          Code = 128 // 4.00
-	CodeUnauthorized        Code = 129 // 4.01
-	CodeNotFound            Code = 132 // 4.04
-	CodeMethodNotAllowed    Code = 133 // 4.05
-	CodeInternalServerError Code = 160 // 5.00
-	CodeNotImplemented      Code = 161 // 5.01
-	CodeServiceUnavailable  Code = 163 // 5.03
+	// CodeCreated is 2.01 Created.
+	CodeCreated Code = 65
+	// CodeDeleted is 2.02 Deleted.
+	CodeDeleted Code = 66
+	// CodeValid is 2.03 Valid.
+	CodeValid Code = 67
+	// CodeChanged is 2.04 Changed.
+	CodeChanged Code = 68
+	// CodeContent is 2.05 Content.
+	CodeContent Code = 69
+	// CodeContinue is 2.31 Continue, the interim answer to a block-wise
+	// request body (RFC 7959).
+	CodeContinue Code = 95
+	// CodeBadRequest is 4.00 Bad Request.
+	CodeBadRequest Code = 128
+	// CodeUnauthorized is 4.01 Unauthorized.
+	CodeUnauthorized Code = 129
+	// CodeNotFound is 4.04 Not Found.
+	CodeNotFound Code = 132
+	// CodeMethodNotAllowed is 4.05 Method Not Allowed.
+	CodeMethodNotAllowed Code = 133
+	// CodePreconditionFailed is 4.12 Precondition Failed.
+	CodePreconditionFailed Code = 140
+	// CodeRequestEntityTooLarge is 4.13 Request Entity Too Large.
+	CodeRequestEntityTooLarge Code = 141
+	// CodeUnsupportedContentFormat is 4.15 Unsupported Content-Format.
+	CodeUnsupportedContentFormat Code = 143
+	// CodeInternalServerError is 5.00 Internal Server Error.
+	CodeInternalServerError Code = 160
+	// CodeNotImplemented is 5.01 Not Implemented.
+	CodeNotImplemented Code = 161
+	// CodeServiceUnavailable is 5.03 Service Unavailable.
+	CodeServiceUnavailable Code = 163
 )
 
 // Class returns the code class (0-7).
@@ -63,181 +121,72 @@ func (c Code) Detail() uint8 { return uint8(c) & 0x1f }
 // String renders the code as "c.dd".
 func (c Code) String() string { return fmt.Sprintf("%d.%02d", c.Class(), c.Detail()) }
 
-// Option numbers used by common CoAP features.
-const (
-	OptionObserve       uint16 = 6
-	OptionURIPath       uint16 = 11
-	OptionContentFormat uint16 = 12
-	OptionURIQuery      uint16 = 15
-	OptionAccept        uint16 = 17
-	OptionBlock2        uint16 = 23
-	OptionBlock1        uint16 = 27
-)
+// IsRequest reports whether the code is a request method code: class 0 with a
+// non-zero detail. The empty code, 0.00, is not a request.
+func (c Code) IsRequest() bool { return c.Class() == 0 && c.Detail() != 0 }
 
-// Option is a CoAP option.
-type Option struct {
-	Number uint16
-	Value  []byte
-}
-
-// Message is a CoAP message.
-type Message struct {
-	Version   uint8
-	Type      Type
-	Code      Code
-	MessageID uint16
-	Token     []byte
-	Options   []Option
-	Payload   []byte
-}
-
-var (
-	// ErrMalformed is returned for invalid CoAP bytes.
-	ErrMalformed = errors.New("coap: malformed message")
-)
-
-// Marshal encodes the message.
-func (m Message) Marshal() ([]byte, error) {
-	if len(m.Token) > 8 {
-		return nil, fmt.Errorf("%w: token too long", ErrMalformed)
-	}
-	ver := m.Version
-	if ver == 0 {
-		ver = Version
-	}
-	if ver != Version {
-		return nil, fmt.Errorf("%w: unsupported version %d", ErrMalformed, ver)
-	}
-	out := make([]byte, 4, 16+len(m.Payload))
-	out[0] = ver<<6 | byte(m.Type&0x3)<<4 | byte(len(m.Token))
-	out[1] = byte(m.Code)
-	binary.BigEndian.PutUint16(out[2:4], m.MessageID)
-	out = append(out, m.Token...)
-
-	opts := append([]Option(nil), m.Options...)
-	sort.SliceStable(opts, func(i, j int) bool { return opts[i].Number < opts[j].Number })
-	last := 0
-	for _, opt := range opts {
-		delta := int(opt.Number) - last
-		if delta < 0 {
-			return nil, fmt.Errorf("%w: negative option delta", ErrMalformed)
-		}
-		out = appendOption(out, delta, opt.Value)
-		last = int(opt.Number)
-	}
-	if len(m.Payload) > 0 {
-		out = append(out, 0xFF)
-		out = append(out, m.Payload...)
-	}
-	return out, nil
-}
-
-func appendOption(dst []byte, delta int, value []byte) []byte {
-	dn, dext := optionNibble(delta)
-	ln, lext := optionNibble(len(value))
-	dst = append(dst, dn<<4|ln)
-	dst = append(dst, dext...)
-	dst = append(dst, lext...)
-	return append(dst, value...)
-}
-
-func optionNibble(v int) (byte, []byte) {
-	switch {
-	case v < 13:
-		return byte(v), nil
-	case v < 269:
-		return 13, []byte{byte(v - 13)}
+// IsResponse reports whether the code is a response code, that is class 2
+// (success), 4 (client error) or 5 (server error). Classes 1, 3, 6 and 7 are
+// reserved.
+func (c Code) IsResponse() bool {
+	switch c.Class() {
+	case 2, 4, 5:
+		return true
 	default:
-		var ext [2]byte
-		binary.BigEndian.PutUint16(ext[:], uint16(v-269))
-		return 14, ext[:]
+		return false
 	}
 }
 
-// Parse decodes a CoAP message.
-func Parse(data []byte) (Message, error) {
-	var m Message
-	if len(data) < 4 {
-		return m, ErrMalformed
-	}
-	m.Version = data[0] >> 6
-	if m.Version != Version {
-		return m, fmt.Errorf("%w: unsupported version %d", ErrMalformed, m.Version)
-	}
-	m.Type = Type((data[0] >> 4) & 0x3)
-	tokenLen := int(data[0] & 0x0f)
-	if tokenLen > 8 || len(data) < 4+tokenLen {
-		return m, ErrMalformed
-	}
-	m.Code = Code(data[1])
-	m.MessageID = binary.BigEndian.Uint16(data[2:4])
-	rest := data[4:]
-	m.Token = append([]byte(nil), rest[:tokenLen]...)
-	rest = rest[tokenLen:]
-
-	number := 0
-	for len(rest) > 0 {
-		if rest[0] == 0xFF {
-			if len(rest) == 1 {
-				return m, fmt.Errorf("%w: empty payload marker", ErrMalformed)
-			}
-			m.Payload = append([]byte(nil), rest[1:]...)
-			return m, nil
-		}
-		delta, length, n, err := parseOptionHeader(rest)
-		if err != nil {
-			return m, err
-		}
-		rest = rest[n:]
-		if len(rest) < length {
-			return m, ErrMalformed
-		}
-		number += delta
-		if number > 65535 {
-			return m, fmt.Errorf("%w: option number overflow", ErrMalformed)
-		}
-		m.Options = append(m.Options, Option{Number: uint16(number), Value: append([]byte(nil), rest[:length]...)})
-		rest = rest[length:]
-	}
-	return m, nil
+// Option is one CoAP option: the option number from the registry and the raw
+// value bytes exactly as they travel on the wire.
+//
+// Option values are not interpreted here; the typed accessors on Message do
+// that. Options with numbers this package does not know are carried unchanged,
+// which is what lets an endpoint implement extensions without a codec change.
+type Option struct {
+	// Number is the option number: the accumulated delta of the option stream.
+	Number uint16
+	// Value is the raw option value. For a known option number, Encode and
+	// the validated setters bound its length to the option definition.
+	Value []byte
 }
 
-func parseOptionHeader(b []byte) (delta, length, consumed int, err error) {
-	if len(b) < 1 {
-		return 0, 0, 0, ErrMalformed
-	}
-	dn := b[0] >> 4
-	ln := b[0] & 0x0f
-	consumed = 1
-	readExt := func(nibble byte) (int, error) {
-		switch nibble {
-		case 13:
-			if len(b) < consumed+1 {
-				return 0, ErrMalformed
-			}
-			v := int(b[consumed]) + 13
-			consumed++
-			return v, nil
-		case 14:
-			if len(b) < consumed+2 {
-				return 0, ErrMalformed
-			}
-			v := int(binary.BigEndian.Uint16(b[consumed:consumed+2])) + 269
-			consumed += 2
-			return v, nil
-		case 15:
-			return 0, fmt.Errorf("%w: reserved option nibble", ErrMalformed)
-		default:
-			return int(nibble), nil
-		}
-	}
-	delta, err = readExt(dn)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	length, err = readExt(ln)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	return delta, length, consumed, nil
+// Message is one CoAP message: the header, token, options and payload of a
+// single datagram.
+//
+// Options are wire-faithful, so a decoded message can be re-encoded without
+// losing an extension. The typed accessors keep the list sorted by number;
+// Marshal sorts it before encoding, and Encode rejects a list that is unsorted
+// or repeats an option that is not repeatable.
+//
+// The typed layer describes messages only. Retransmission, message-id
+// deduplication, observe registries and block-wise reassembly belong to the
+// protocol library that consumes this package.
+type Message struct {
+	// Version is the CoAP version. A decoded message always has it set; a zero
+	// value is treated as Version when encoding, so a message built by hand
+	// does not need it.
+	Version uint8
+	// Type is the message type.
+	Type Type
+	// Code is the request method or the response code.
+	Code Code
+	// MessageID is the 16-bit message identifier used for deduplication and
+	// for matching an acknowledgement to its confirmable message. Choosing
+	// and tracking it is exchange state, not wire format.
+	MessageID uint16
+	// Token matches a response to the request that caused it. A decoded token
+	// is newly allocated and 0 to 8 bytes long.
+	Token []byte
+	// Options holds the options. Marshal sorts them by number; Encode requires
+	// them sorted.
+	Options []Option
+	// Payload is the message body. It is empty when the datagram carries no
+	// payload marker.
+	Payload []byte
 }
+
+// ErrMalformed indicates an invalid CoAP message. Every decoding failure wraps
+// it, including a datagram that exceeds a configured size limit; codec/wire's
+// KindOf reports which class of failure it was.
+var ErrMalformed = errors.New("coap: malformed message")
