@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/pion/dtls/v2"
+
+	ws "github.com/maxid/gnety/codec/http/websocket"
 )
 
 // TLSConfig configures TLS for "tcp-tls" and "wss" networks.
@@ -125,7 +127,7 @@ func New(cfg Config) (*Server, error) {
 		if cfg.Path[0] != '/' {
 			return nil, errors.New("gnety: WebSocket Path must start with /")
 		}
-		if cfg.Subprotocol != "" && !validWebSocketToken(cfg.Subprotocol) {
+		if cfg.Subprotocol != "" && !ws.ValidSubprotocol(cfg.Subprotocol) {
 			return nil, errors.New("gnety: invalid WebSocket subprotocol")
 		}
 	}
@@ -419,11 +421,16 @@ func (s *Server) wsHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		if s.cfg.Subprotocol != "" && !hasWebSocketSubprotocol(r.Header, s.cfg.Subprotocol) {
+		if s.cfg.Subprotocol != "" && !ws.HasSubprotocol(r.Header, s.cfg.Subprotocol) {
 			http.Error(w, "missing WebSocket subprotocol", http.StatusBadRequest)
 			return
 		}
-		conn, err := acceptWebSocket(w, r, s.cfg.Subprotocol, s.cfg.MaxFrameSize, s.cfg.OriginPatterns, s.cfg.AllowAnyOrigin)
+		conn, err := ws.Accept(w, r, ws.Options{
+			Subprotocol:    s.cfg.Subprotocol,
+			OriginPatterns: s.cfg.OriginPatterns,
+			AllowAnyOrigin: s.cfg.AllowAnyOrigin,
+			MaxMessageSize: s.cfg.MaxFrameSize,
+		})
 		if err != nil {
 			return
 		}

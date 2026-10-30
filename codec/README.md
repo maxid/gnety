@@ -7,10 +7,10 @@ protocol state machines and no business semantics.**
 
 ```
 codec/
-  mqtt/       MQTT 3.1.1/5 packet encode/decode (CONNECT/PUBLISH/SUBSCRIBE/...)
-  coap/       CoAP message/option encode/decode  [implemented]
-  http/       HTTP/1.1 request/response codec
-  websocket/  WebSocket frame codec (when not using net/http)
+  mqtt/             MQTT 3.1/3.1.1/5 packet codec          [implemented]
+  coap/             CoAP message/option codec             [implemented]
+  http/             HTTP/1.1 helpers for Upgrade         [implemented]
+  http/websocket/   RFC 6455 handshake/frame/message/conn [implemented]
 ```
 
 ## Contract

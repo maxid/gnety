@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/pion/dtls/v2"
+
+	ws "github.com/maxid/gnety/codec/http/websocket"
 )
 
 // ClientConfig configures a client connector.
@@ -180,8 +182,8 @@ func (c *Client) Close() error {
 }
 
 // WebSocket returns the underlying WebSocket connection when Network is ws/wss.
-func (c *Client) WebSocket() (*WebSocketConn, bool) {
-	w, ok := c.conn.(*webSocketConn)
+func (c *Client) WebSocket() (*ws.Conn, bool) {
+	w, ok := c.conn.(*ws.Conn)
 	return w, ok
 }
 

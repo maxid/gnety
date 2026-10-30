@@ -1,4 +1,4 @@
-package gnety
+package websocket
 
 import (
 	"bufio"
@@ -14,12 +14,12 @@ import (
 	"unicode/utf8"
 )
 
-const defaultWebSocketMaxFrameSize = 4 << 20
+const defaultMaxMessageSize = 4 << 20
 
-// webSocketConn is the message/stream adapter in gnety's transport pipeline.
+// Conn is the message/stream adapter in gnety's transport pipeline.
 // The frame codec is in websocket_frame.go; handshakes are in
 // websocket_handshake.go. Protocol state machines remain above RawHandler.
-type webSocketConn struct {
+type Conn struct {
 	raw         net.Conn
 	reader      *bufio.Reader
 	writer      *bufio.Writer
@@ -28,7 +28,7 @@ type webSocketConn struct {
 	subprotocol string
 
 	readMu         sync.Mutex
-	frame          webSocketFrameHeader
+	frame          frameHeader
 	frameActive    bool
 	frameRemaining uint64
 	frameOffset    uint64
@@ -50,11 +50,11 @@ type webSocketConn struct {
 	activePings   map[string]chan struct{}
 }
 
-func newWebSocketConn(raw net.Conn, rw *bufio.ReadWriter, maskWrites bool, maxFrameSize int, subprotocol string) *webSocketConn {
+func newConn(raw net.Conn, rw *bufio.ReadWriter, maskWrites bool, maxFrameSize int, subprotocol string) *Conn {
 	if maxFrameSize <= 0 {
-		maxFrameSize = defaultWebSocketMaxFrameSize
+		maxFrameSize = defaultMaxMessageSize
 	}
-	c := &webSocketConn{
+	c := &Conn{
 		raw: raw, reader: rw.Reader, writer: rw.Writer,
 		maskWrites: maskWrites, subprotocol: subprotocol,
 		done:        make(chan struct{}),
@@ -64,7 +64,7 @@ func newWebSocketConn(raw net.Conn, rw *bufio.ReadWriter, maskWrites bool, maxFr
 	return c
 }
 
-func (c *webSocketConn) Read(p []byte) (int, error) {
+func (c *Conn) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -87,12 +87,12 @@ func (c *webSocketConn) Read(p []byte) (int, error) {
 		if n > 0 {
 			chunk := p[:n]
 			if c.frame.masked {
-				applyWebSocketMask(chunk, c.frame.maskingKey, c.frameOffset)
+				applyMask(chunk, c.frame.maskingKey, c.frameOffset)
 			}
 			c.frameOffset += uint64(n)
 			c.frameRemaining -= uint64(n)
-			if c.messageOpcode == webSocketTextFrame && !c.validTextChunk(chunk, false) {
-				return n, c.setReadFailure(&webSocketProtocolError{status: 1007, text: "invalid UTF-8 text message"})
+			if c.messageOpcode == textFrame && !c.validTextChunk(chunk, false) {
+				return n, c.setReadFailure(&protocolError{status: 1007, text: "invalid UTF-8 text message"})
 			}
 			if c.frameRemaining == 0 {
 				if finishErr := c.finishDataFrame(); finishErr != nil {
@@ -111,52 +111,52 @@ func (c *webSocketConn) Read(p []byte) (int, error) {
 	}
 }
 
-func (c *webSocketConn) readDataFrame() error {
+func (c *Conn) readDataFrame() error {
 	for {
-		h, err := readWebSocketFrameHeader(c.reader)
+		h, err := readFrameHeader(c.reader)
 		if err != nil {
 			return err
 		}
 		// Clients mask writes and require unmasked server frames; servers
 		// require masked client frames and never mask their own writes.
 		if h.masked == c.maskWrites {
-			return newWebSocketProtocolError("invalid masking direction")
+			return newProtocolError("invalid masking direction")
 		}
 		switch h.opcode {
-		case webSocketPingFrame, webSocketPongFrame, webSocketCloseFrame:
+		case pingFrame, pongFrame, closeFrame:
 			payload, err := c.readControlPayload(h)
 			if err != nil {
 				return err
 			}
 			switch h.opcode {
-			case webSocketPingFrame:
-				if err := c.writeControl(webSocketPongFrame, payload); err != nil {
+			case pingFrame:
+				if err := c.writeControl(pongFrame, payload); err != nil {
 					return err
 				}
-			case webSocketPongFrame:
+			case pongFrame:
 				c.deliverPong(payload)
-			case webSocketCloseFrame:
+			case closeFrame:
 				status := uint16(1000)
 				if len(payload) == 1 {
-					return newWebSocketProtocolError("close payload has one byte")
+					return newProtocolError("close payload has one byte")
 				}
 				if len(payload) >= 2 {
 					status = binary.BigEndian.Uint16(payload[:2])
-					if !validWebSocketCloseStatus(status) || !utf8.Valid(payload[2:]) {
-						return newWebSocketProtocolError("invalid close status or reason")
+					if !validCloseStatus(status) || !utf8.Valid(payload[2:]) {
+						return newProtocolError("invalid close status or reason")
 					}
 				}
 				_ = c.writeClose(status)
 				return io.EOF
 			}
 			continue
-		case webSocketContinuationFrame:
+		case continuationFrame:
 			if !c.inMessage {
-				return newWebSocketProtocolError("continuation without an active message")
+				return newProtocolError("continuation without an active message")
 			}
-		case webSocketTextFrame, webSocketBinaryFrame:
+		case textFrame, binaryFrame:
 			if c.inMessage {
-				return newWebSocketProtocolError("new data frame during a fragmented message")
+				return newProtocolError("new data frame during a fragmented message")
 			}
 			c.inMessage = true
 			c.messageOpcode = h.opcode
@@ -182,24 +182,24 @@ func (c *webSocketConn) readDataFrame() error {
 	}
 }
 
-func (c *webSocketConn) readControlPayload(h webSocketFrameHeader) ([]byte, error) {
+func (c *Conn) readControlPayload(h frameHeader) ([]byte, error) {
 	payload := make([]byte, int(h.length))
 	if _, err := io.ReadFull(c.reader, payload); err != nil {
 		return nil, err
 	}
 	if h.masked {
-		applyWebSocketMask(payload, h.maskingKey, 0)
+		applyMask(payload, h.maskingKey, 0)
 	}
 	return payload, nil
 }
 
-func (c *webSocketConn) finishDataFrame() error {
+func (c *Conn) finishDataFrame() error {
 	c.frameActive = false
 	if !c.frame.fin {
 		return nil
 	}
-	if c.messageOpcode == webSocketTextFrame && !c.validTextChunk(nil, true) {
-		return &webSocketProtocolError{status: 1007, text: "incomplete UTF-8 text message"}
+	if c.messageOpcode == textFrame && !c.validTextChunk(nil, true) {
+		return &protocolError{status: 1007, text: "incomplete UTF-8 text message"}
 	}
 	c.inMessage = false
 	c.messageOpcode = 0
@@ -208,11 +208,11 @@ func (c *webSocketConn) finishDataFrame() error {
 	return nil
 }
 
-func (c *webSocketConn) setReadFailure(err error) error {
+func (c *Conn) setReadFailure(err error) error {
 	if c.readErr != nil {
 		return c.readErr
 	}
-	var protocolErr *webSocketProtocolError
+	var protocolErr *protocolError
 	switch {
 	case errors.Is(err, ErrFrameTooLarge):
 		_ = c.writeClose(1009)
@@ -223,79 +223,79 @@ func (c *webSocketConn) setReadFailure(err error) error {
 	return err
 }
 
-func (c *webSocketConn) Write(p []byte) (int, error) {
+func (c *Conn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed {
 		return 0, net.ErrClosed
 	}
-	if err := writeWebSocketFrame(c.writer, c.maskWrites, true, webSocketBinaryFrame, p); err != nil {
+	if err := writeFrame(c.writer, c.maskWrites, true, binaryFrame, p); err != nil {
 		return 0, err
 	}
 	return len(p), nil
 }
 
-func (c *webSocketConn) writeControl(opcode byte, payload []byte) error {
+func (c *Conn) writeControl(opcode byte, payload []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed {
 		return net.ErrClosed
 	}
-	return writeWebSocketFrame(c.writer, c.maskWrites, true, opcode, payload)
+	return writeFrame(c.writer, c.maskWrites, true, opcode, payload)
 }
 
-func (c *webSocketConn) writeClose(status uint16) error {
+func (c *Conn) writeClose(status uint16) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed || c.closeSent {
 		return nil
 	}
 	payload := []byte{byte(status >> 8), byte(status)}
-	err := writeWebSocketFrame(c.writer, c.maskWrites, true, webSocketCloseFrame, payload)
+	err := writeFrame(c.writer, c.maskWrites, true, closeFrame, payload)
 	c.closeSent = true
 	return err
 }
 
-func (c *webSocketConn) Close() error {
-	return c.CloseWithStatus(WebSocketStatusNormalClosure, "")
+func (c *Conn) Close() error {
+	return c.CloseWithStatus(StatusCodeNormalClosure, "")
 }
 
 // WebSocketConn is the public WebSocket net.Conn adapter.
-type WebSocketConn = webSocketConn
+type WebSocketConn = Conn
 
-// WebSocketStatus is a WebSocket close status code.
-type WebSocketStatus uint16
+// StatusCode is a WebSocket close status code.
+type StatusCode uint16
 
 const (
-	WebSocketStatusNormalClosure   WebSocketStatus = 1000
-	WebSocketStatusGoingAway       WebSocketStatus = 1001
-	WebSocketStatusProtocolError   WebSocketStatus = 1002
-	WebSocketStatusUnsupportedData WebSocketStatus = 1003
-	WebSocketStatusInvalidPayload  WebSocketStatus = 1007
-	WebSocketStatusPolicyViolation WebSocketStatus = 1008
-	WebSocketStatusMessageTooBig   WebSocketStatus = 1009
-	WebSocketStatusInternalError   WebSocketStatus = 1011
+	StatusCodeNormalClosure   StatusCode = 1000
+	StatusCodeGoingAway       StatusCode = 1001
+	StatusCodeProtocolError   StatusCode = 1002
+	StatusCodeUnsupportedData StatusCode = 1003
+	StatusCodeInvalidPayload  StatusCode = 1007
+	StatusCodePolicyViolation StatusCode = 1008
+	StatusCodeMessageTooBig   StatusCode = 1009
+	StatusCodeInternalError   StatusCode = 1011
 )
 
-// WebSocketCloseError reports a peer close status.
-type WebSocketCloseError struct {
-	Code   WebSocketStatus
+// CloseError reports a peer close status.
+type CloseError struct {
+	Code   StatusCode
 	Reason string
 }
 
-func (e *WebSocketCloseError) Error() string {
+func (e *CloseError) Error() string {
 	return fmt.Sprintf("gnety: websocket closed: %d %s", e.Code, e.Reason)
 }
 
 // CloseWithStatus performs the close handshake frame write and closes the raw
 // connection. The reason is truncated to the RFC 6455 control payload limit.
-func (c *webSocketConn) CloseWithStatus(status WebSocketStatus, reason string) error {
+func (c *Conn) CloseWithStatus(status StatusCode, reason string) error {
 	c.closeOnce.Do(func() {
 		c.writeMu.Lock()
 		var closeFrameErr error
 		if !c.closed && !c.closeSent {
-			if !validWebSocketCloseStatus(uint16(status)) {
-				status = WebSocketStatusNormalClosure
+			if !validCloseStatus(uint16(status)) {
+				status = StatusCodeNormalClosure
 			}
 			if !utf8.ValidString(reason) {
 				reason = ""
@@ -305,7 +305,7 @@ func (c *webSocketConn) CloseWithStatus(status WebSocketStatus, reason string) e
 			}
 			payload := []byte{byte(status >> 8), byte(status)}
 			payload = append(payload, reason...)
-			closeFrameErr = writeWebSocketFrame(c.writer, c.maskWrites, true, webSocketCloseFrame, payload)
+			closeFrameErr = writeFrame(c.writer, c.maskWrites, true, closeFrame, payload)
 			c.closeSent = true
 		}
 		c.closed = true
@@ -322,24 +322,24 @@ func (c *webSocketConn) CloseWithStatus(status WebSocketStatus, reason string) e
 }
 
 // SetReadLimit limits the reassembled message size. n < 0 disables the limit.
-func (c *webSocketConn) SetReadLimit(n int64) {
+func (c *Conn) SetReadLimit(n int64) {
 	if n < 0 {
 		c.maxMessage.Store(^uint64(0))
 		return
 	}
 	if n == 0 {
-		c.maxMessage.Store(defaultWebSocketMaxFrameSize)
+		c.maxMessage.Store(defaultMaxMessageSize)
 		return
 	}
 	c.maxMessage.Store(uint64(n))
 }
 
 // Subprotocol returns the negotiated WebSocket subprotocol.
-func (c *webSocketConn) Subprotocol() string { return c.subprotocol }
+func (c *Conn) Subprotocol() string { return c.subprotocol }
 
 // Ping sends a ping and waits for the matching pong. A concurrent Read is
 // required to process the pong, as with coder/websocket's Ping API.
-func (c *webSocketConn) Ping(ctx context.Context, payload []byte) error {
+func (c *Conn) Ping(ctx context.Context, payload []byte) error {
 	if len(payload) > 125 {
 		return errors.New("gnety: websocket ping payload exceeds 125 bytes")
 	}
@@ -356,7 +356,7 @@ func (c *webSocketConn) Ping(ctx context.Context, payload []byte) error {
 		delete(c.activePings, key)
 		c.activePingsMu.Unlock()
 	}()
-	if err := c.writeControl(webSocketPingFrame, []byte(key)); err != nil {
+	if err := c.writeControl(pingFrame, []byte(key)); err != nil {
 		return err
 	}
 	select {
@@ -369,7 +369,7 @@ func (c *webSocketConn) Ping(ctx context.Context, payload []byte) error {
 	}
 }
 
-func (c *webSocketConn) deliverPong(payload []byte) {
+func (c *Conn) deliverPong(payload []byte) {
 	c.activePingsMu.Lock()
 	ch := c.activePings[string(payload)]
 	c.activePingsMu.Unlock()
@@ -381,13 +381,13 @@ func (c *webSocketConn) deliverPong(payload []byte) {
 	}
 }
 
-func (c *webSocketConn) LocalAddr() net.Addr                { return c.raw.LocalAddr() }
-func (c *webSocketConn) RemoteAddr() net.Addr               { return c.raw.RemoteAddr() }
-func (c *webSocketConn) SetDeadline(t time.Time) error      { return c.raw.SetDeadline(t) }
-func (c *webSocketConn) SetReadDeadline(t time.Time) error  { return c.raw.SetReadDeadline(t) }
-func (c *webSocketConn) SetWriteDeadline(t time.Time) error { return c.raw.SetWriteDeadline(t) }
+func (c *Conn) LocalAddr() net.Addr                { return c.raw.LocalAddr() }
+func (c *Conn) RemoteAddr() net.Addr               { return c.raw.RemoteAddr() }
+func (c *Conn) SetDeadline(t time.Time) error      { return c.raw.SetDeadline(t) }
+func (c *Conn) SetReadDeadline(t time.Time) error  { return c.raw.SetReadDeadline(t) }
+func (c *Conn) SetWriteDeadline(t time.Time) error { return c.raw.SetWriteDeadline(t) }
 
-func (c *webSocketConn) validTextChunk(p []byte, final bool) bool {
+func (c *Conn) validTextChunk(p []byte, final bool) bool {
 	for len(p) > 0 {
 		if c.textExpected == 0 {
 			if p[0] < utf8.RuneSelf {
@@ -424,7 +424,7 @@ func (c *webSocketConn) validTextChunk(p []byte, final bool) bool {
 	return !final || c.textExpected == 0
 }
 
-func validWebSocketCloseStatus(status uint16) bool {
+func validCloseStatus(status uint16) bool {
 	if status < 1000 || status >= 5000 {
 		return false
 	}

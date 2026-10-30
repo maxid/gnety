@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+- Moved RFC 6455 WebSocket handshake/frame/message/Conn into codec/http/websocket;
+  transport/server/client only wire the codec. Public Config/behavior unchanged.
+
+
 - WebSocket API inspired by coder/websocket and Netty: Origin allowlist, Ping/Pong,
   CloseWithStatus with close codes/reason, SetReadLimit, Subprotocol accessors.
 

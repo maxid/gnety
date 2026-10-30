@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	ws "github.com/maxid/gnety/codec/http/websocket"
 )
 
 // ErrSessionClosed is returned when sending on a closed session.
@@ -152,8 +154,8 @@ func (s *Session) Close() error {
 
 // WebSocket returns the underlying WebSocket connection when this session is
 // carried over ws/wss.
-func (s *Session) WebSocket() (*WebSocketConn, bool) {
-	w, ok := s.conn.(*webSocketConn)
+func (s *Session) WebSocket() (*ws.Conn, bool) {
+	w, ok := s.conn.(*ws.Conn)
 	return w, ok
 }
 

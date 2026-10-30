@@ -10,13 +10,14 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
+
+	ws "github.com/maxid/gnety/codec/http/websocket"
 )
 
 // ErrFrameTooLarge is returned when a decoded frame exceeds MaxFrameSize.
-var ErrFrameTooLarge = errors.New("gnety: frame too large")
+var ErrFrameTooLarge = ws.ErrFrameTooLarge
 
 // Codec decodes/encodes stream frames for TCP.
 type Codec interface {

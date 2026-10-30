@@ -1,4 +1,4 @@
-package gnety
+package websocket
 
 import (
 	"bufio"
@@ -9,26 +9,26 @@ import (
 )
 
 const (
-	webSocketContinuationFrame = 0x0
-	webSocketTextFrame         = 0x1
-	webSocketBinaryFrame       = 0x2
-	webSocketCloseFrame        = 0x8
-	webSocketPingFrame         = 0x9
-	webSocketPongFrame         = 0xa
+	continuationFrame = 0x0
+	textFrame         = 0x1
+	binaryFrame       = 0x2
+	closeFrame        = 0x8
+	pingFrame         = 0x9
+	pongFrame         = 0xa
 )
 
-type webSocketProtocolError struct {
+type protocolError struct {
 	status uint16
 	text   string
 }
 
-func (e *webSocketProtocolError) Error() string { return "gnety: websocket: " + e.text }
+func (e *protocolError) Error() string { return "gnety: websocket: " + e.text }
 
-func newWebSocketProtocolError(format string, args ...any) error {
-	return &webSocketProtocolError{status: 1002, text: fmt.Sprintf(format, args...)}
+func newProtocolError(format string, args ...any) error {
+	return &protocolError{status: 1002, text: fmt.Sprintf(format, args...)}
 }
 
-type webSocketFrameHeader struct {
+type frameHeader struct {
 	fin        bool
 	opcode     byte
 	length     uint64
@@ -36,26 +36,26 @@ type webSocketFrameHeader struct {
 	maskingKey [4]byte
 }
 
-func readWebSocketFrameHeader(r *bufio.Reader) (webSocketFrameHeader, error) {
-	var h webSocketFrameHeader
+func readFrameHeader(r *bufio.Reader) (frameHeader, error) {
+	var h frameHeader
 	var first [2]byte
 	if _, err := io.ReadFull(r, first[:]); err != nil {
 		return h, err
 	}
 	h.fin = first[0]&0x80 != 0
 	if first[0]&0x70 != 0 {
-		return h, newWebSocketProtocolError("RSV bits require a negotiated extension")
+		return h, newProtocolError("RSV bits require a negotiated extension")
 	}
 	h.opcode = first[0] & 0x0f
 	switch h.opcode {
-	case webSocketContinuationFrame, webSocketTextFrame, webSocketBinaryFrame,
-		webSocketCloseFrame, webSocketPingFrame, webSocketPongFrame:
+	case continuationFrame, textFrame, binaryFrame,
+		closeFrame, pingFrame, pongFrame:
 	default:
-		return h, newWebSocketProtocolError("reserved opcode %#x", h.opcode)
+		return h, newProtocolError("reserved opcode %#x", h.opcode)
 	}
 	control := h.opcode&0x08 != 0
 	if control && !h.fin {
-		return h, newWebSocketProtocolError("fragmented control frame")
+		return h, newProtocolError("fragmented control frame")
 	}
 
 	h.masked = first[1]&0x80 != 0
@@ -68,7 +68,7 @@ func readWebSocketFrameHeader(r *bufio.Reader) (webSocketFrameHeader, error) {
 		}
 		h.length = uint64(binary.BigEndian.Uint16(extended[:]))
 		if h.length < 126 {
-			return h, newWebSocketProtocolError("non-minimal 16-bit payload length")
+			return h, newProtocolError("non-minimal 16-bit payload length")
 		}
 	case 127:
 		var extended [8]byte
@@ -76,17 +76,17 @@ func readWebSocketFrameHeader(r *bufio.Reader) (webSocketFrameHeader, error) {
 			return h, err
 		}
 		if extended[0]&0x80 != 0 {
-			return h, newWebSocketProtocolError("payload length exceeds 63 bits")
+			return h, newProtocolError("payload length exceeds 63 bits")
 		}
 		h.length = binary.BigEndian.Uint64(extended[:])
 		if h.length < 65536 {
-			return h, newWebSocketProtocolError("non-minimal 64-bit payload length")
+			return h, newProtocolError("non-minimal 64-bit payload length")
 		}
 	default:
 		h.length = uint64(length)
 	}
 	if control && h.length > 125 {
-		return h, newWebSocketProtocolError("control frame payload exceeds 125 bytes")
+		return h, newProtocolError("control frame payload exceeds 125 bytes")
 	}
 	if h.masked {
 		if _, err := io.ReadFull(r, h.maskingKey[:]); err != nil {
@@ -96,7 +96,7 @@ func readWebSocketFrameHeader(r *bufio.Reader) (webSocketFrameHeader, error) {
 	return h, nil
 }
 
-func writeWebSocketFrame(w *bufio.Writer, masked, fin bool, opcode byte, payload []byte) error {
+func writeFrame(w *bufio.Writer, masked, fin bool, opcode byte, payload []byte) error {
 	var header [14]byte
 	first := opcode
 	if fin {
@@ -139,7 +139,7 @@ func writeWebSocketFrame(w *bufio.Writer, masked, fin bool, opcode byte, payload
 				n = len(buf)
 			}
 			copy(buf[:n], payload[:n])
-			applyWebSocketMask(buf[:n], maskingKey, 0)
+			applyMask(buf[:n], maskingKey, 0)
 			if _, err := w.Write(buf[:n]); err != nil {
 				return err
 			}
@@ -151,7 +151,7 @@ func writeWebSocketFrame(w *bufio.Writer, masked, fin bool, opcode byte, payload
 	return w.Flush()
 }
 
-func applyWebSocketMask(payload []byte, key [4]byte, offset uint64) {
+func applyMask(payload []byte, key [4]byte, offset uint64) {
 	for i := range payload {
 		payload[i] ^= key[(offset+uint64(i))%4]
 	}
