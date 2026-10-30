@@ -104,20 +104,15 @@ func (d *Decoder) Decode(r *bufio.Reader) (Message, error) {
 	}
 
 	// The body reader is bounded by the remaining length, so every field read is
-	// budget-checked and a truncated packet reports ErrIncomplete. codec/wire
-	// treats a non-positive budget as "unlimited", so an empty body gets a
-	// one-byte budget instead: any read at all then shows up as a mismatch
-	// between consumed and declared bytes.
-	budget := remaining
-	if budget == 0 {
-		budget = 1
-	}
-	rd := wire.NewReader(r, budget)
+	// budget-checked and a truncated packet reports ErrIncomplete. A zero
+	// remaining length is a real budget of zero: any read at all then fails
+	// instead of blocking on the next packet's bytes.
+	rd := wire.NewReader(r, remaining)
 	m, err := decodeBody(rd, packetType, flags, version)
 	if err != nil {
 		return nil, err
 	}
-	if consumed := budget - rd.Budget(); consumed != remaining {
+	if consumed := remaining - rd.Budget(); consumed != remaining {
 		return nil, malformed("%s decodes %d body bytes but its remaining length is %d", packetName(packetType), consumed, remaining)
 	}
 	if c, ok := m.(*Connect); ok {

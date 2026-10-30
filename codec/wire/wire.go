@@ -30,7 +30,8 @@ import (
 	"unicode/utf8"
 )
 
-// DefaultMaxFrame bounds a single frame when the caller gives no budget.
+// DefaultMaxFrame bounds a single frame when the caller gives no budget (a
+// negative one).
 const DefaultMaxFrame = 4 << 20
 
 // Kind classifies a wire error.
@@ -126,10 +127,11 @@ type Reader struct {
 	depth    int
 }
 
-// NewReader wraps r with a byte budget. A non-positive budget means
-// DefaultMaxFrame.
+// NewReader wraps r with a byte budget. A negative budget means
+// DefaultMaxFrame; a zero budget allows no bytes at all, so an empty frame body
+// can be represented without inventing a one-byte allowance.
 func NewReader(r *bufio.Reader, budget int) *Reader {
-	if budget <= 0 {
+	if budget < 0 {
 		budget = DefaultMaxFrame
 	}
 	return &Reader{r: r, budget: budget, maxDepth: 16}
