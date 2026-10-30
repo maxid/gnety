@@ -8,9 +8,8 @@ request correlation. Go's ecosystem offers:
 
 - `net` — correct, simple, goroutine-per-connection; no framing/session model;
 - `gnet` — fast event loop; no framing/session/handler model;
-- `go-netty` — Netty-inspired pipeline; smaller community/maintenance than gnet.
 
-`gnety` targets a **Netty-class developer experience**: composable pipeline,
+`gnety` targets a **high-level developer experience**: composable pipeline,
 transport + framing + session + lifecycle, and reusable protocol codecs. It
 does not clone the API, but it aims to be as easy to extend.
 

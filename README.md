@@ -136,7 +136,6 @@ n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 
 ## References
 
-- [go-netty/go-netty](https://github.com/go-netty/go-netty) — Netty-inspired pipeline framework (Apache-2.0); design reference, not a dependency.
 - [panjf2000/gnet](https://github.com/panjf2000/gnet) — high-performance event-loop networking (Apache-2.0); planned optional backend.
 
 ## Versioning

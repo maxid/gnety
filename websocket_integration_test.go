@@ -124,8 +124,5 @@ func TestWebSocketPing(t *testing.T) {
 		t.Fatalf("ping: %v", err)
 	}
 	_ = ws.CloseWithStatus(WebSocketStatusGoingAway, "done")
-	select {
-	case <-readErr:
-	case <-time.After(time.Second):
-	}
+	<-readErr
 }

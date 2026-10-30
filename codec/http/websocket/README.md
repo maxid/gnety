@@ -1,6 +1,6 @@
 # codec/http/websocket
 
-Standard-library-only RFC 6455 WebSocket codec, following Netty `codec-http` layering.
+Standard-library-only RFC 6455 WebSocket codec, layered like typical HTTP codec stacks.
 
 - `handshake.go`: HTTP Upgrade, v13 Key/Accept, exact subprotocol, Origin policy.
 - `frame.go`: frame header/length/masking/opcode/control frame wire format.

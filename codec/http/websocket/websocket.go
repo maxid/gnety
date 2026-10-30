@@ -35,15 +35,15 @@ type Conn struct {
 	inMessage      bool
 	messageOpcode  byte
 	messageSize    uint64
-	textPending    []byte
-	textExpected   int
+	textUTF8       utf8Validator
 	readErr        error
 
 	writeMu   sync.Mutex
 	closeOnce sync.Once
+	doneOnce  sync.Once
 	closeErr  error
-	closeSent bool
-	closed    bool
+	closeSent atomic.Bool
+	closed    atomic.Bool
 	done      chan struct{}
 
 	activePingsMu sync.Mutex
@@ -91,7 +91,7 @@ func (c *Conn) Read(p []byte) (int, error) {
 			}
 			c.frameOffset += uint64(n)
 			c.frameRemaining -= uint64(n)
-			if c.messageOpcode == textFrame && !c.validTextChunk(chunk, false) {
+			if c.messageOpcode == textFrame && !c.textUTF8.check(chunk) {
 				return n, c.setReadFailure(&protocolError{status: 1007, text: "invalid UTF-8 text message"})
 			}
 			if c.frameRemaining == 0 {
@@ -136,18 +136,22 @@ func (c *Conn) readDataFrame() error {
 			case pongFrame:
 				c.deliverPong(payload)
 			case closeFrame:
-				status := uint16(1000)
+				ce := CloseError{Code: StatusCodeNormalClosure}
 				if len(payload) == 1 {
 					return newProtocolError("close payload has one byte")
 				}
 				if len(payload) >= 2 {
-					status = binary.BigEndian.Uint16(payload[:2])
-					if !validCloseStatus(status) || !utf8.Valid(payload[2:]) {
+					ce.Code = StatusCode(binary.BigEndian.Uint16(payload[:2]))
+					ce.Reason = string(payload[2:])
+					if !validCloseStatus(uint16(ce.Code)) || !utf8.ValidString(ce.Reason) {
 						return newProtocolError("invalid close status or reason")
 					}
 				}
-				_ = c.writeClose(status)
-				return io.EOF
+				if !c.closeSent.Load() {
+					_ = c.writeClose(uint16(ce.Code))
+				}
+				c.doneOnce.Do(func() { close(c.done) })
+				return &ce
 			}
 			continue
 		case continuationFrame:
@@ -161,8 +165,7 @@ func (c *Conn) readDataFrame() error {
 			c.inMessage = true
 			c.messageOpcode = h.opcode
 			c.messageSize = 0
-			c.textPending = c.textPending[:0]
-			c.textExpected = 0
+			c.textUTF8.reset()
 		}
 		if h.length > c.maxMessage.Load()-c.messageSize {
 			return ErrFrameTooLarge
@@ -198,13 +201,11 @@ func (c *Conn) finishDataFrame() error {
 	if !c.frame.fin {
 		return nil
 	}
-	if c.messageOpcode == textFrame && !c.validTextChunk(nil, true) {
+	if c.messageOpcode == textFrame && !c.textUTF8.finish() {
 		return &protocolError{status: 1007, text: "incomplete UTF-8 text message"}
 	}
 	c.inMessage = false
 	c.messageOpcode = 0
-	c.textPending = c.textPending[:0]
-	c.textExpected = 0
 	return nil
 }
 
@@ -226,7 +227,7 @@ func (c *Conn) setReadFailure(err error) error {
 func (c *Conn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return 0, net.ErrClosed
 	}
 	if err := writeFrame(c.writer, c.maskWrites, true, binaryFrame, p); err != nil {
@@ -238,7 +239,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 func (c *Conn) writeControl(opcode byte, payload []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return net.ErrClosed
 	}
 	return writeFrame(c.writer, c.maskWrites, true, opcode, payload)
@@ -247,12 +248,12 @@ func (c *Conn) writeControl(opcode byte, payload []byte) error {
 func (c *Conn) writeClose(status uint16) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed || c.closeSent {
+	if c.closed.Load() || c.closeSent.Load() {
 		return nil
 	}
 	payload := []byte{byte(status >> 8), byte(status)}
 	err := writeFrame(c.writer, c.maskWrites, true, closeFrame, payload)
-	c.closeSent = true
+	c.closeSent.Store(true)
 	return err
 }
 
@@ -287,13 +288,25 @@ func (e *CloseError) Error() string {
 	return fmt.Sprintf("gnety: websocket closed: %d %s", e.Code, e.Reason)
 }
 
+// Unwrap preserves io.EOF compatibility for net.Conn-style readers.
+func (e *CloseError) Unwrap() error { return io.EOF }
+
+// CloseStatus extracts the peer close status from an error.
+func CloseStatus(err error) StatusCode {
+	var ce *CloseError
+	if errors.As(err, &ce) {
+		return ce.Code
+	}
+	return 0
+}
+
 // CloseWithStatus performs the close handshake frame write and closes the raw
 // connection. The reason is truncated to the RFC 6455 control payload limit.
 func (c *Conn) CloseWithStatus(status StatusCode, reason string) error {
 	c.closeOnce.Do(func() {
 		c.writeMu.Lock()
 		var closeFrameErr error
-		if !c.closed && !c.closeSent {
+		if !c.closed.Load() && !c.closeSent.Load() {
 			if !validCloseStatus(uint16(status)) {
 				status = StatusCodeNormalClosure
 			}
@@ -306,11 +319,25 @@ func (c *Conn) CloseWithStatus(status StatusCode, reason string) error {
 			payload := []byte{byte(status >> 8), byte(status)}
 			payload = append(payload, reason...)
 			closeFrameErr = writeFrame(c.writer, c.maskWrites, true, closeFrame, payload)
-			c.closeSent = true
+			c.closeSent.Store(true)
 		}
-		c.closed = true
 		c.writeMu.Unlock()
-		close(c.done)
+
+		// Best-effort peer close wait: only when no reader owns readMu. An active
+		// reader already consumes control frames and will close the transport.
+		if c.readMu.TryLock() {
+			_ = c.raw.SetReadDeadline(time.Now().Add(time.Second))
+			for {
+				if err := c.readDataFrame(); err != nil {
+					break
+				}
+			}
+			_ = c.raw.SetReadDeadline(time.Time{})
+			c.readMu.Unlock()
+		}
+
+		c.closed.Store(true)
+		c.doneOnce.Do(func() { close(c.done) })
 		rawErr := c.raw.Close()
 		if closeFrameErr != nil {
 			c.closeErr = closeFrameErr
@@ -338,7 +365,7 @@ func (c *Conn) SetReadLimit(n int64) {
 func (c *Conn) Subprotocol() string { return c.subprotocol }
 
 // Ping sends a ping and waits for the matching pong. A concurrent Read is
-// required to process the pong, as with coder/websocket's Ping API.
+// required to process the pong.
 func (c *Conn) Ping(ctx context.Context, payload []byte) error {
 	if len(payload) > 125 {
 		return errors.New("gnety: websocket ping payload exceeds 125 bytes")
@@ -386,43 +413,6 @@ func (c *Conn) RemoteAddr() net.Addr               { return c.raw.RemoteAddr() }
 func (c *Conn) SetDeadline(t time.Time) error      { return c.raw.SetDeadline(t) }
 func (c *Conn) SetReadDeadline(t time.Time) error  { return c.raw.SetReadDeadline(t) }
 func (c *Conn) SetWriteDeadline(t time.Time) error { return c.raw.SetWriteDeadline(t) }
-
-func (c *Conn) validTextChunk(p []byte, final bool) bool {
-	for len(p) > 0 {
-		if c.textExpected == 0 {
-			if p[0] < utf8.RuneSelf {
-				p = p[1:]
-				continue
-			}
-			switch {
-			case p[0] >= 0xc2 && p[0] <= 0xdf:
-				c.textExpected = 2
-			case p[0] >= 0xe0 && p[0] <= 0xef:
-				c.textExpected = 3
-			case p[0] >= 0xf0 && p[0] <= 0xf4:
-				c.textExpected = 4
-			default:
-				return false
-			}
-		}
-		need := c.textExpected - len(c.textPending)
-		take := len(p)
-		if take > need {
-			take = need
-		}
-		c.textPending = append(c.textPending, p[:take]...)
-		p = p[take:]
-		if len(c.textPending) == c.textExpected {
-			r, size := utf8.DecodeRune(c.textPending)
-			if r == utf8.RuneError && size == 1 {
-				return false
-			}
-			c.textPending = c.textPending[:0]
-			c.textExpected = 0
-		}
-	}
-	return !final || c.textExpected == 0
-}
 
 func validCloseStatus(status uint16) bool {
 	if status < 1000 || status >= 5000 {

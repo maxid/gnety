@@ -1,6 +1,6 @@
 // Package gnety is a small TCP/UDP transport framework for custom device
 // protocols. It provides framing codecs, sessions and lifecycle handlers, but
-// deliberately avoids a Netty-style annotation/pipeline clone.
+// deliberately avoids an annotation/pipeline clone.
 //
 // Scope: custom binary/text protocols over TCP and UDP. MQTT stays in gmqx,
 // HTTP stays in net/http.

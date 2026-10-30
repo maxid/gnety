@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"testing"
+	"time"
 )
 
 func rawWebSocketFrame(fin bool, opcode byte, payload []byte, masked bool) []byte {
@@ -199,5 +201,75 @@ func TestWebSocketCloseEcho(t *testing.T) {
 	}
 	if h.opcode != closeFrame || binary.BigEndian.Uint16(payload[:2]) != 1000 {
 		t.Fatalf("unexpected close response: %+v %v", h, payload)
+	}
+}
+
+func TestUTF8ValidatorDFACases(t *testing.T) {
+	valid := []struct {
+		name  string
+		parts [][]byte
+	}{
+		{"ascii", [][]byte{[]byte("hello")}},
+		{"euro-split", [][]byte{{0xe2}, {0x82, 0xac}}},
+		{"emoji-split", [][]byte{{0xf0, 0x9f}, {0x98, 0x80}}},
+	}
+	for _, tt := range valid {
+		var v utf8Validator
+		for _, p := range tt.parts {
+			if !v.check(p) {
+				t.Fatalf("%s: rejected valid UTF-8", tt.name)
+			}
+		}
+		if !v.finish() {
+			t.Fatalf("%s: incomplete valid UTF-8", tt.name)
+		}
+	}
+	invalid := []struct {
+		name string
+		data []byte
+	}{
+		{"overlong", []byte{0xc0, 0xaf}},
+		{"surrogate", []byte{0xed, 0xa0, 0x80}},
+		{"bad-continuation", []byte{0xe2, 0x28, 0xa1}},
+		{"truncated", []byte{0xe2, 0x82}},
+	}
+	for _, tt := range invalid {
+		var v utf8Validator
+		ok := v.check(tt.data)
+		if ok && v.finish() {
+			t.Fatalf("%s: accepted invalid UTF-8", tt.name)
+		}
+	}
+}
+
+func TestCloseErrorAndHandshake(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	client := newConn(a, bufio.NewReadWriter(bufio.NewReader(a), bufio.NewWriter(a)), true, 4096, "")
+	server := newConn(b, bufio.NewReadWriter(bufio.NewReader(b), bufio.NewWriter(b)), false, 4096, "")
+
+	serverErr := make(chan error, 1)
+	go func() {
+		_, err := server.Read(make([]byte, 1))
+		serverErr <- err
+	}()
+	go func() {
+		_, _ = client.Read(make([]byte, 1)) // drive client close wait
+	}()
+	if err := client.CloseWithStatus(StatusCodeGoingAway, "bye"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("server error does not unwrap EOF: %v", err)
+		}
+		var ce *CloseError
+		if !errors.As(err, &ce) || ce.Code != StatusCodeGoingAway || ce.Reason != "bye" {
+			t.Fatalf("server close error = %#v", ce)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not finish close handshake")
 	}
 }
