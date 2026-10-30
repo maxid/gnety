@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/maxid/gnety/codec/wire"
 )
 
 // ErrMalformedPacket indicates an invalid MQTT packet.
@@ -53,39 +55,30 @@ func WritePacket(w io.Writer, header byte, body []byte) error {
 }
 
 // ReadRemainingLength decodes the variable-length "remaining length" field.
+//
+// It uses the shared codec/wire varint so every protocol in this module rejects
+// the same malformed shapes (over-wide and non-minimally encoded). Truncated
+// input keeps its I/O error and additionally satisfies errors.Is(ErrIncomplete).
 func ReadRemainingLength(r *bufio.Reader) (int, error) {
-	multiplier := 1
-	value := 0
-	for i := 0; i < 4; i++ {
-		b, err := r.ReadByte()
-		if err != nil {
+	v, err := wire.ReadVarint(r, wire.MaxVarintBytes)
+	if err != nil {
+		if wire.KindOf(err) == wire.KindIncomplete {
 			return 0, err
 		}
-		value += int(b&127) * multiplier
-		if b&128 == 0 {
-			if value > MaxRemainingLength {
-				return 0, fmt.Errorf("%w: remaining length overflow", ErrMalformedPacket)
-			}
-			return value, nil
-		}
-		multiplier *= 128
+		return 0, fmt.Errorf("%w: %w", ErrMalformedPacket, err)
 	}
-	return 0, fmt.Errorf("%w: malformed remaining length", ErrMalformedPacket)
+	if v > MaxRemainingLength {
+		return 0, fmt.Errorf("%w: remaining length overflow", ErrMalformedPacket)
+	}
+	return int(v), nil
 }
 
 // AppendRemainingLength encodes a "remaining length" field onto dst.
 func AppendRemainingLength(dst []byte, n int) []byte {
-	for {
-		encoded := byte(n % 128)
-		n /= 128
-		if n > 0 {
-			encoded |= 128
-		}
-		dst = append(dst, encoded)
-		if n == 0 {
-			return dst
-		}
+	if n < 0 {
+		n = 0
 	}
+	return wire.AppendVarint(dst, uint64(n))
 }
 
 // ReadUint16 reads a big-endian uint16 and returns the remaining bytes.

@@ -111,7 +111,8 @@ func KindOf(err error) Kind {
 // incomplete turns a short-read error into ErrIncomplete.
 func incomplete(err error) error {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return fmt.Errorf("%w: %v", ErrIncomplete, err)
+		// Wrap both so callers can test either the wire kind or the io cause.
+		return fmt.Errorf("%w: %w", ErrIncomplete, err)
 	}
 	return err
 }
