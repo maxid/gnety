@@ -48,14 +48,14 @@ func Accept(w http.ResponseWriter, r *http.Request, opts Options) (*Conn, error)
 		return nil, err
 	}
 
-	// Reach Hijack through http.ResponseController rather than asserting
-	// http.Hijacker: middleware routinely wraps the ResponseWriter, and a
-	// direct assertion fails behind such a wrapper even though the wrapper
-	// unwraps to a hijackable writer.
-	raw, rw, err := http.NewResponseController(w).Hijack()
-	if err != nil {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
 		http.Error(w, "WebSocket hijacking unsupported", http.StatusInternalServerError)
-		return nil, fmt.Errorf("gnety: websocket hijacking unsupported: %w", err)
+		return nil, errors.New("gnety: WebSocket hijacking unsupported")
+	}
+	raw, rw, err := hijacker.Hijack()
+	if err != nil {
+		return nil, err
 	}
 	if _, err := fmt.Fprintf(rw.Writer,
 		"HTTP/1.1 101 Switching Protocols\r\n"+

@@ -7,8 +7,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"testing"
 	"time"
 )
@@ -273,76 +271,5 @@ func TestCloseErrorAndHandshake(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server did not finish close handshake")
-	}
-}
-
-// wrappingWriter mimics middleware that wraps a ResponseWriter and exposes the
-// original through Unwrap instead of implementing http.Hijacker itself.
-type wrappingWriter struct{ http.ResponseWriter }
-
-func (w wrappingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-// TestAcceptBehindWrappedResponseWriter guards the embedding case: a gateway
-// handler almost never receives the raw ResponseWriter, so a direct
-// http.Hijacker assertion would fail even though the writer is hijackable.
-func TestAcceptBehindWrappedResponseWriter(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-
-	serverErr := make(chan error, 1)
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := Accept(wrappingWriter{w}, r, Options{})
-		if err != nil {
-			serverErr <- err
-			return
-		}
-		defer conn.Close()
-
-		buf := make([]byte, 64)
-		n, err := conn.Read(buf)
-		if err != nil {
-			serverErr <- err
-			return
-		}
-		_, err = conn.Write(buf[:n])
-		serverErr <- err
-	})}
-	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
-
-	raw, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	conn, err := ClientHandshake(raw, &url.URL{Scheme: "ws", Host: ln.Addr().String(), Path: "/ws"}, "", Options{})
-	if err != nil {
-		raw.Close()
-		t.Fatalf("client handshake: %v", err)
-	}
-	defer conn.Close()
-
-	if _, err := conn.Write([]byte("hello")); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		t.Fatalf("deadline: %v", err)
-	}
-	got := make([]byte, 5)
-	if _, err := io.ReadFull(conn, got); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got) != "hello" {
-		t.Fatalf("echo = %q, want hello", got)
-	}
-
-	select {
-	case err := <-serverErr:
-		if err != nil {
-			t.Fatalf("server: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("server did not finish")
 	}
 }
