@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	ws "github.com/maxid/gnety/codec/http/websocket"
+	"github.com/maxid/gnety/codec/wire"
 )
 
 // ErrSessionClosed is returned when sending on a closed session.
@@ -94,17 +96,34 @@ type Session struct {
 	pendingMu sync.Mutex
 	pending   map[string]chan any
 	hbDone    chan struct{}
+
+	// writeSem bounds concurrent writers so a slow peer cannot queue writes
+	// without bound; nil means the gate is disabled.
+	writeSem chan struct{}
+	reason   atomic.Value
 }
 
 func (s *Session) init() {
 	s.pending = make(map[string]chan any)
 	s.hbDone = make(chan struct{})
+	if n := s.srv.maxQueuedWrites(); n > 0 {
+		s.writeSem = make(chan struct{}, n)
+	}
 }
 
 // Send encodes and writes a message to the peer.
 func (s *Session) Send(msg any) error {
 	if s.closed.Load() {
 		return ErrSessionClosed
+	}
+	if s.writeSem != nil {
+		select {
+		case s.writeSem <- struct{}{}:
+			defer func() { <-s.writeSem }()
+		default:
+			s.srv.metric().WriteFailed(s.srv.transport(), ReasonBackpressure)
+			return ErrWriteBusy
+		}
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -122,7 +141,7 @@ func (s *Session) Send(msg any) error {
 				return err
 			}
 			_, err = s.conn.Write(raw)
-			return wrapWriteError(err)
+			return s.finishWrite(err)
 		}
 		var buf bytes.Buffer
 		if s.srv.cfg.Codec == nil {
@@ -132,7 +151,7 @@ func (s *Session) Send(msg any) error {
 			return err
 		}
 		_, err := s.conn.Write(buf.Bytes())
-		return wrapWriteError(err)
+		return s.finishWrite(err)
 	}
 	if s.srv.pc == nil || s.srv.cfg.DatagramCodec == nil {
 		return errors.New("gnety: no UDP datagram codec configured")
@@ -142,7 +161,21 @@ func (s *Session) Send(msg any) error {
 		return err
 	}
 	_, err = s.srv.pc.WriteTo(b, s.RemoteAddr)
-	return err
+	return s.finishWrite(err)
+}
+
+// finishWrite classifies a write result and records the outcome.
+func (s *Session) finishWrite(err error) error {
+	wrapped := wrapWriteError(err)
+	switch {
+	case wrapped == nil:
+		s.srv.metric().MessageOut(s.srv.transport())
+	case errors.Is(wrapped, ErrWriteTimeout):
+		s.srv.metric().WriteFailed(s.srv.transport(), ReasonWriteTimeout)
+	default:
+		s.srv.metric().WriteFailed(s.srv.transport(), ReasonWriteError)
+	}
+	return wrapped
 }
 
 func wrapWriteError(err error) error {
@@ -280,7 +313,7 @@ func (s *Session) startHeartbeat() {
 				if timeout := s.srv.cfg.HeartbeatTimeout; timeout > 0 {
 					last := time.Unix(0, s.lastSeen.Load())
 					if time.Since(last) > timeout {
-						_ = s.Close()
+						s.closeWith(ReasonHeartbeatTimeout)
 						return
 					}
 				}
@@ -288,7 +321,7 @@ func (s *Session) startHeartbeat() {
 					continue
 				}
 				if err := s.Send(s.srv.cfg.Heartbeat(s)); err != nil {
-					_ = s.Close()
+					s.closeWith(ReasonWriteError)
 					return
 				}
 			}
@@ -308,6 +341,31 @@ func (s *Session) closeOnceWith(err error) {
 			delete(s.pending, key)
 		}
 		s.pendingMu.Unlock()
+		s.srv.metric().SessionClose(s.srv.transport(), s.closeReason(err))
 		s.srv.cfg.Handler.OnClose(s, err)
 	})
+}
+
+// closeWith records why the session is closing, then closes it.
+func (s *Session) closeWith(reason string) {
+	s.reason.Store(reason)
+	_ = s.Close()
+}
+
+// closeReason prefers the reason a caller recorded and otherwise derives one
+// from the read error that ended the session.
+func (s *Session) closeReason(err error) string {
+	if v, ok := s.reason.Load().(string); ok && v != "" {
+		return v
+	}
+	switch {
+	case err == nil, errors.Is(err, io.EOF):
+		return ReasonClosed
+	case errors.Is(err, ErrWriteTimeout):
+		return ReasonWriteTimeout
+	case wire.KindOf(err) != wire.KindUnknown:
+		return ReasonDecoderError
+	default:
+		return ReasonReadError
+	}
 }

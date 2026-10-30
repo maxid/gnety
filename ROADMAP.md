@@ -9,7 +9,7 @@
 - [x] Line/Fixed-length frame codecs
 - [x] Protocol codec kit: shared `codec/wire` primitives (bounded reader/writer, varint, UTF-8, chunk reassembly, error kinds)
 - [x] Protocol codec kit: MQTT, CoAP, HTTP/WebSocket and Modbus MBAP+PDU wire formats
-- [ ] Metrics hooks
+- [x] Metrics hooks (low-cardinality transport/reason events)
 - [x] TLS / WebSocket / WSS listeners
 - [x] DTLS transport (server/client)
 - [ ] Optional gnet backend + benchmarks

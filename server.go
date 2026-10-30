@@ -56,6 +56,8 @@ type Config struct {
 	DatagramCodec DatagramCodec
 	// Handler receives lifecycle and messages.
 	Handler Handler
+	// Metrics receives transport events. Nil drops them (NoopMetrics).
+	Metrics Metrics
 	// IdleTimeout closes idle TCP connections / UDP peers (0 = disabled).
 	IdleTimeout time.Duration
 	// MaxFrameSize is passed to codecs (0 = codec default).
@@ -65,6 +67,11 @@ type Config struct {
 	// MaxPendingRequests limits per-session Request correlation entries
 	// (0 = unlimited).
 	MaxPendingRequests int
+	// MaxQueuedWrites bounds how many goroutines may wait to write on one
+	// session; beyond that Session.Send fails with ErrWriteBusy instead of
+	// queueing without bound. 0 uses DefaultMaxQueuedWrites, negative disables
+	// the gate.
+	MaxQueuedWrites int
 	// WriteTimeout bounds each Session/Client write (0 = no deadline).
 	WriteTimeout time.Duration
 	// ShutdownTimeout bounds Stop; 0 uses a 5s compatibility default.
@@ -280,7 +287,7 @@ func (s *Server) Stop(ctx context.Context) error {
 		_ = httpSrv.Close()
 	}
 	for _, sess := range sessions {
-		_ = sess.Close()
+		sess.closeWith(ReasonShutdown)
 	}
 	for _, conn := range conns {
 		_ = conn.Close()
@@ -385,6 +392,7 @@ func (s *Server) acceptDTLS() {
 		}
 		if max := s.cfg.MaxSessions; max > 0 && len(s.conns) >= max {
 			s.mu.Unlock()
+			s.metric().SessionRejected(s.transport(), ReasonMaxSessions)
 			_ = conn.Close()
 			continue
 		}
@@ -432,6 +440,7 @@ func (s *Server) serveDatagram(sess *Session) {
 		if err != nil {
 			continue
 		}
+		s.metric().MessageIn(s.transport())
 		sess.touch()
 		if !sess.deliverResponse(msg) || s.cfg.DeliverResponsesToHandler {
 			s.cfg.Handler.OnMessage(sess, msg)
@@ -468,6 +477,7 @@ func (s *Server) wsHandler() http.Handler {
 		}
 		if max := s.cfg.MaxSessions; max > 0 && len(s.conns) >= max {
 			s.mu.Unlock()
+			s.metric().SessionRejected(s.transport(), ReasonMaxSessions)
 			_ = conn.Close()
 			return
 		}
@@ -496,6 +506,7 @@ func (s *Server) addSession(sess *Session) {
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
+	s.metric().SessionOpen(s.transport())
 	s.cfg.Handler.OnOpen(sess)
 	sess.startHeartbeat()
 }
@@ -544,6 +555,7 @@ func (s *Server) acceptTCP() {
 		}
 		if max := s.cfg.MaxSessions; max > 0 && len(s.conns) >= max {
 			s.mu.Unlock()
+			s.metric().SessionRejected(s.transport(), ReasonMaxSessions)
 			_ = conn.Close()
 			continue
 		}
@@ -591,6 +603,7 @@ func (s *Server) serveTCP(sess *Session) {
 			closeErr = err
 			return
 		}
+		s.metric().MessageIn(s.transport())
 		sess.touch()
 		if !sess.deliverResponse(msg) || s.cfg.DeliverResponsesToHandler {
 			s.cfg.Handler.OnMessage(sess, msg)
@@ -624,6 +637,7 @@ func (s *Server) readUDP() {
 		if err != nil {
 			continue
 		}
+		s.metric().MessageIn(s.transport())
 		sess.touch()
 		if !sess.deliverResponse(msg) || s.cfg.DeliverResponsesToHandler {
 			s.cfg.Handler.OnMessage(sess, msg)
@@ -640,6 +654,7 @@ func (s *Server) udpSession(addr net.Addr) *Session {
 	}
 	if s.cfg.MaxSessions > 0 && len(s.sessions) >= s.cfg.MaxSessions {
 		s.mu.Unlock()
+		s.metric().SessionRejected(s.transport(), ReasonMaxSessions)
 		return nil
 	}
 	sess := &Session{ID: id, RemoteAddr: addr, srv: s}
@@ -647,6 +662,7 @@ func (s *Server) udpSession(addr net.Addr) *Session {
 	sess.touch()
 	s.sessions[id] = sess
 	s.mu.Unlock()
+	s.metric().SessionOpen(s.transport())
 	s.cfg.Handler.OnOpen(sess)
 	sess.startHeartbeat()
 	return sess
@@ -672,6 +688,7 @@ func (s *Server) cleanupUDP() {
 			}
 			s.mu.Unlock()
 			for _, sess := range expired {
+				sess.reason.Store(ReasonIdleTimeout)
 				sess.closeOnceWith(errors.New("gnety: udp session idle timeout"))
 			}
 		}

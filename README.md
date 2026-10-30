@@ -10,7 +10,7 @@ protocol libraries built on top.
 
 > Status: **development snapshot (untagged)** — TCP/UDP/TLS/WS/WSS/DTLS servers and
 > clients, pipeline middleware, frame + MQTT/CoAP/Modbus codecs, sessions,
-> request/response correlation and heartbeats. Metrics hooks are on the roadmap;
+> request/response correlation, heartbeats, metrics hooks and bounded write queues;
 > the HTTP/WebSocket codec packages are placeholders.
 > No tags are published until a stable release; use commit pseudo-versions.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
