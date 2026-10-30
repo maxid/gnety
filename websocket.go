@@ -2,11 +2,14 @@ package gnety
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -17,11 +20,12 @@ const defaultWebSocketMaxFrameSize = 4 << 20
 // The frame codec is in websocket_frame.go; handshakes are in
 // websocket_handshake.go. Protocol state machines remain above RawHandler.
 type webSocketConn struct {
-	raw        net.Conn
-	reader     *bufio.Reader
-	writer     *bufio.Writer
-	maskWrites bool
-	maxMessage uint64
+	raw         net.Conn
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	maskWrites  bool
+	maxMessage  atomic.Uint64
+	subprotocol string
 
 	readMu         sync.Mutex
 	frame          webSocketFrameHeader
@@ -40,16 +44,24 @@ type webSocketConn struct {
 	closeErr  error
 	closeSent bool
 	closed    bool
+	done      chan struct{}
+
+	activePingsMu sync.Mutex
+	activePings   map[string]chan struct{}
 }
 
-func newWebSocketConn(raw net.Conn, rw *bufio.ReadWriter, maskWrites bool, maxFrameSize int) *webSocketConn {
+func newWebSocketConn(raw net.Conn, rw *bufio.ReadWriter, maskWrites bool, maxFrameSize int, subprotocol string) *webSocketConn {
 	if maxFrameSize <= 0 {
 		maxFrameSize = defaultWebSocketMaxFrameSize
 	}
-	return &webSocketConn{
+	c := &webSocketConn{
 		raw: raw, reader: rw.Reader, writer: rw.Writer,
-		maskWrites: maskWrites, maxMessage: uint64(maxFrameSize),
+		maskWrites: maskWrites, subprotocol: subprotocol,
+		done:        make(chan struct{}),
+		activePings: make(map[string]chan struct{}),
 	}
+	c.maxMessage.Store(uint64(maxFrameSize))
+	return c
 }
 
 func (c *webSocketConn) Read(p []byte) (int, error) {
@@ -121,6 +133,8 @@ func (c *webSocketConn) readDataFrame() error {
 				if err := c.writeControl(webSocketPongFrame, payload); err != nil {
 					return err
 				}
+			case webSocketPongFrame:
+				c.deliverPong(payload)
 			case webSocketCloseFrame:
 				status := uint16(1000)
 				if len(payload) == 1 {
@@ -150,7 +164,7 @@ func (c *webSocketConn) readDataFrame() error {
 			c.textPending = c.textPending[:0]
 			c.textExpected = 0
 		}
-		if h.length > c.maxMessage-c.messageSize {
+		if h.length > c.maxMessage.Load()-c.messageSize {
 			return ErrFrameTooLarge
 		}
 		c.messageSize += h.length
@@ -243,15 +257,60 @@ func (c *webSocketConn) writeClose(status uint16) error {
 }
 
 func (c *webSocketConn) Close() error {
+	return c.CloseWithStatus(WebSocketStatusNormalClosure, "")
+}
+
+// WebSocketConn is the public WebSocket net.Conn adapter.
+type WebSocketConn = webSocketConn
+
+// WebSocketStatus is a WebSocket close status code.
+type WebSocketStatus uint16
+
+const (
+	WebSocketStatusNormalClosure   WebSocketStatus = 1000
+	WebSocketStatusGoingAway       WebSocketStatus = 1001
+	WebSocketStatusProtocolError   WebSocketStatus = 1002
+	WebSocketStatusUnsupportedData WebSocketStatus = 1003
+	WebSocketStatusInvalidPayload  WebSocketStatus = 1007
+	WebSocketStatusPolicyViolation WebSocketStatus = 1008
+	WebSocketStatusMessageTooBig   WebSocketStatus = 1009
+	WebSocketStatusInternalError   WebSocketStatus = 1011
+)
+
+// WebSocketCloseError reports a peer close status.
+type WebSocketCloseError struct {
+	Code   WebSocketStatus
+	Reason string
+}
+
+func (e *WebSocketCloseError) Error() string {
+	return fmt.Sprintf("gnety: websocket closed: %d %s", e.Code, e.Reason)
+}
+
+// CloseWithStatus performs the close handshake frame write and closes the raw
+// connection. The reason is truncated to the RFC 6455 control payload limit.
+func (c *webSocketConn) CloseWithStatus(status WebSocketStatus, reason string) error {
 	c.closeOnce.Do(func() {
 		c.writeMu.Lock()
 		var closeFrameErr error
 		if !c.closed && !c.closeSent {
-			closeFrameErr = writeWebSocketFrame(c.writer, c.maskWrites, true, webSocketCloseFrame, []byte{0x03, 0xe8})
+			if !validWebSocketCloseStatus(uint16(status)) {
+				status = WebSocketStatusNormalClosure
+			}
+			if !utf8.ValidString(reason) {
+				reason = ""
+			}
+			if len(reason) > 123 {
+				reason = reason[:123]
+			}
+			payload := []byte{byte(status >> 8), byte(status)}
+			payload = append(payload, reason...)
+			closeFrameErr = writeWebSocketFrame(c.writer, c.maskWrites, true, webSocketCloseFrame, payload)
 			c.closeSent = true
 		}
 		c.closed = true
 		c.writeMu.Unlock()
+		close(c.done)
 		rawErr := c.raw.Close()
 		if closeFrameErr != nil {
 			c.closeErr = closeFrameErr
@@ -260,6 +319,66 @@ func (c *webSocketConn) Close() error {
 		}
 	})
 	return c.closeErr
+}
+
+// SetReadLimit limits the reassembled message size. n < 0 disables the limit.
+func (c *webSocketConn) SetReadLimit(n int64) {
+	if n < 0 {
+		c.maxMessage.Store(^uint64(0))
+		return
+	}
+	if n == 0 {
+		c.maxMessage.Store(defaultWebSocketMaxFrameSize)
+		return
+	}
+	c.maxMessage.Store(uint64(n))
+}
+
+// Subprotocol returns the negotiated WebSocket subprotocol.
+func (c *webSocketConn) Subprotocol() string { return c.subprotocol }
+
+// Ping sends a ping and waits for the matching pong. A concurrent Read is
+// required to process the pong, as with coder/websocket's Ping API.
+func (c *webSocketConn) Ping(ctx context.Context, payload []byte) error {
+	if len(payload) > 125 {
+		return errors.New("gnety: websocket ping payload exceeds 125 bytes")
+	}
+	key := string(payload)
+	if key == "" {
+		key = "gnety-ping"
+	}
+	ch := make(chan struct{}, 1)
+	c.activePingsMu.Lock()
+	c.activePings[key] = ch
+	c.activePingsMu.Unlock()
+	defer func() {
+		c.activePingsMu.Lock()
+		delete(c.activePings, key)
+		c.activePingsMu.Unlock()
+	}()
+	if err := c.writeControl(webSocketPingFrame, []byte(key)); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return net.ErrClosed
+	case <-ch:
+		return nil
+	}
+}
+
+func (c *webSocketConn) deliverPong(payload []byte) {
+	c.activePingsMu.Lock()
+	ch := c.activePings[string(payload)]
+	c.activePingsMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (c *webSocketConn) LocalAddr() net.Addr                { return c.raw.LocalAddr() }

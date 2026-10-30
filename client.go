@@ -22,6 +22,7 @@ type ClientConfig struct {
 	Addr          string
 	Path          string // WebSocket path (default "/")
 	Subprotocol   string // WebSocket subprotocol (optional)
+	Origin        string // WebSocket Origin override (optional)
 	Codec         Codec
 	DatagramCodec DatagramCodec
 	TLS           TLSConfig
@@ -176,6 +177,12 @@ func (c *Client) Close() error {
 	err := c.conn.Close()
 	c.conn = nil
 	return err
+}
+
+// WebSocket returns the underlying WebSocket connection when Network is ws/wss.
+func (c *Client) WebSocket() (*WebSocketConn, bool) {
+	w, ok := c.conn.(*webSocketConn)
+	return w, ok
 }
 
 // LocalAddr returns the local address.

@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+- WebSocket API inspired by coder/websocket and Netty: Origin allowlist, Ping/Pong,
+  CloseWithStatus with close codes/reason, SetReadLimit, Subprotocol accessors.
+
+
 - Native RFC 6455 WebSocket server/client (standard library only): handshake,
   frame codec, fragmentation/control frames/UTF-8 validation and bounded reads.
 

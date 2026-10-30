@@ -12,13 +12,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 )
 
 const webSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-func acceptWebSocket(w http.ResponseWriter, r *http.Request, subprotocol string, maxFrameSize int) (*webSocketConn, error) {
+func acceptWebSocket(w http.ResponseWriter, r *http.Request, subprotocol string, maxFrameSize int, originPatterns []string, allowAnyOrigin bool) (*webSocketConn, error) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "WebSocket requires GET", http.StatusMethodNotAllowed)
 		return nil, errors.New("gnety: websocket handshake requires GET")
@@ -44,6 +45,11 @@ func acceptWebSocket(w http.ResponseWriter, r *http.Request, subprotocol string,
 		return nil, errors.New("gnety: invalid configured WebSocket subprotocol")
 	}
 
+	if err := validWebSocketOrigin(r, originPatterns, allowAnyOrigin); err != nil {
+		http.Error(w, "WebSocket origin is not allowed", http.StatusForbidden)
+		return nil, err
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "WebSocket hijacking unsupported", http.StatusInternalServerError)
@@ -53,9 +59,6 @@ func acceptWebSocket(w http.ResponseWriter, r *http.Request, subprotocol string,
 	if err != nil {
 		return nil, err
 	}
-	// Origin is deliberately not coupled to browser policy here. Device and
-	// broker authentication belongs above the transport; an Origin allowlist can
-	// be added as independent server configuration without changing the codec.
 	if _, err := fmt.Fprintf(rw.Writer,
 		"HTTP/1.1 101 Switching Protocols\r\n"+
 			"Upgrade: websocket\r\n"+
@@ -79,7 +82,7 @@ func acceptWebSocket(w http.ResponseWriter, r *http.Request, subprotocol string,
 		return nil, err
 	}
 	_ = raw.SetDeadline(time.Time{})
-	return newWebSocketConn(raw, rw, false, maxFrameSize), nil
+	return newWebSocketConn(raw, rw, false, maxFrameSize, subprotocol), nil
 }
 
 func dialWebSocket(ctx context.Context, dialer *net.Dialer, cfg ClientConfig) (net.Conn, error) {
@@ -96,6 +99,10 @@ func dialWebSocket(ctx context.Context, dialer *net.Dialer, cfg ClientConfig) (n
 	originScheme := "http"
 	if cfg.Network == "wss" {
 		originScheme = "https"
+	}
+	origin := cfg.Origin
+	if origin == "" {
+		origin = originScheme + "://" + cfg.Addr
 	}
 	location, err := url.Parse(cfg.Network + "://" + cfg.Addr + path)
 	if err != nil || location.Host == "" || location.User != nil || location.Fragment != "" {
@@ -131,7 +138,7 @@ func dialWebSocket(ctx context.Context, dialer *net.Dialer, cfg ClientConfig) (n
 	}
 	_ = raw.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { _ = raw.SetDeadline(time.Now()) })
-	conn, err := clientWebSocketHandshake(raw, location, originScheme+"://"+cfg.Addr, cfg.Subprotocol, cfg.MaxFrameSize)
+	conn, err := clientWebSocketHandshake(raw, location, origin, cfg.Subprotocol, cfg.MaxFrameSize)
 	stopCancel()
 	if err != nil {
 		_ = raw.Close()
@@ -200,7 +207,31 @@ func clientWebSocketHandshake(raw net.Conn, location *url.URL, origin, subprotoc
 	if selected != subprotocol {
 		return nil, fmt.Errorf("gnety: WebSocket subprotocol %q does not match requested %q", selected, subprotocol)
 	}
-	return newWebSocketConn(raw, rw, true, maxFrameSize), nil
+	return newWebSocketConn(raw, rw, true, maxFrameSize, subprotocol), nil
+}
+
+func validWebSocketOrigin(r *http.Request, patterns []string, allowAny bool) error {
+	origin := r.Header.Get("Origin")
+	if origin == "" || allowAny {
+		return nil
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || u.User != nil {
+		return errors.New("gnety: invalid WebSocket Origin")
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return nil
+	}
+	for _, pattern := range patterns {
+		target := u.Host
+		if strings.Contains(pattern, "://") {
+			target = u.Scheme + "://" + u.Host
+		}
+		if ok, _ := path.Match(strings.ToLower(pattern), strings.ToLower(target)); ok {
+			return nil
+		}
+	}
+	return fmt.Errorf("gnety: WebSocket Origin %q is not allowed", origin)
 }
 
 func webSocketAccept(key string) string {

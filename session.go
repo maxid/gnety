@@ -150,6 +150,13 @@ func (s *Session) Close() error {
 	return nil
 }
 
+// WebSocket returns the underlying WebSocket connection when this session is
+// carried over ws/wss.
+func (s *Session) WebSocket() (*WebSocketConn, bool) {
+	w, ok := s.conn.(*webSocketConn)
+	return w, ok
+}
+
 // Closed reports whether the session is closed.
 func (s *Session) Closed() bool { return s.closed.Load() }
 

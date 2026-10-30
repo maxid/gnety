@@ -35,6 +35,14 @@ type Config struct {
 	Path string
 	// Subprotocol is the required WebSocket subprotocol (optional).
 	Subprotocol string
+	// OriginPatterns authorizes cross-origin WebSocket handshakes. Each pattern
+	// is matched case-insensitively with path.Match against the Origin host (or
+	// scheme://host when the pattern contains "://"). Same-host Origin is always
+	// allowed. Empty means cross-origin requests are rejected.
+	OriginPatterns []string
+	// AllowAnyOrigin disables Origin verification. Use only for non-browser
+	// device gateways where Origin is not a security boundary.
+	AllowAnyOrigin bool
 	// TLS configures "tcp-tls"/"wss" listeners.
 	TLS TLSConfig
 	// Codec is required for TCP.
@@ -415,7 +423,7 @@ func (s *Server) wsHandler() http.Handler {
 			http.Error(w, "missing WebSocket subprotocol", http.StatusBadRequest)
 			return
 		}
-		conn, err := acceptWebSocket(w, r, s.cfg.Subprotocol, s.cfg.MaxFrameSize)
+		conn, err := acceptWebSocket(w, r, s.cfg.Subprotocol, s.cfg.MaxFrameSize, s.cfg.OriginPatterns, s.cfg.AllowAnyOrigin)
 		if err != nil {
 			return
 		}
