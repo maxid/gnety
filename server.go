@@ -10,12 +10,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/pion/dtls/v2"
 )
 
@@ -114,6 +112,14 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Path == "" {
 		cfg.Path = "/"
+	}
+	if cfg.Network == "ws" || cfg.Network == "wss" {
+		if cfg.Path[0] != '/' {
+			return nil, errors.New("gnety: WebSocket Path must start with /")
+		}
+		if cfg.Subprotocol != "" && !validWebSocketToken(cfg.Subprotocol) {
+			return nil, errors.New("gnety: invalid WebSocket subprotocol")
+		}
 	}
 	return &Server{cfg: cfg, sessions: make(map[string]*Session), conns: make(map[net.Conn]struct{}), done: make(chan struct{})}, nil
 }
@@ -405,27 +411,14 @@ func (s *Server) wsHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		if s.cfg.Subprotocol != "" {
-			got := strings.ToLower(r.Header.Get("Sec-WebSocket-Protocol"))
-			if !strings.Contains(got, strings.ToLower(s.cfg.Subprotocol)) {
-				http.Error(w, "missing WebSocket subprotocol", http.StatusBadRequest)
-				return
-			}
+		if s.cfg.Subprotocol != "" && !hasWebSocketSubprotocol(r.Header, s.cfg.Subprotocol) {
+			http.Error(w, "missing WebSocket subprotocol", http.StatusBadRequest)
+			return
 		}
-		opts := &websocket.AcceptOptions{InsecureSkipVerify: true}
-		if s.cfg.Subprotocol != "" {
-			opts.Subprotocols = []string{s.cfg.Subprotocol}
-		}
-		c, err := websocket.Accept(w, r, opts)
+		conn, err := acceptWebSocket(w, r, s.cfg.Subprotocol, s.cfg.MaxFrameSize)
 		if err != nil {
 			return
 		}
-		limit := int64(s.cfg.MaxFrameSize)
-		if limit <= 0 {
-			limit = 4 << 20
-		}
-		c.SetReadLimit(limit)
-		conn := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
 		s.mu.Lock()
 		select {
 		case <-s.done:
@@ -438,22 +431,20 @@ func (s *Server) wsHandler() http.Handler {
 		s.mu.Unlock()
 		if s.cfg.RawHandler != nil {
 			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				defer func() {
-					_ = conn.Close()
-					s.mu.Lock()
-					delete(s.conns, conn)
-					s.mu.Unlock()
-				}()
-				s.cfg.RawHandler(conn)
+			defer s.wg.Done()
+			defer func() {
+				_ = conn.Close()
+				s.mu.Lock()
+				delete(s.conns, conn)
+				s.mu.Unlock()
 			}()
+			s.cfg.RawHandler(conn)
 			return
 		}
 		sess := s.newSession(conn)
 		s.addSession(sess)
 		s.wg.Add(1)
-		go s.serveTCP(sess)
+		s.serveTCP(sess)
 	})
 }
 

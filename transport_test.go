@@ -9,15 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 func testCert(t *testing.T) (certFile, keyFile string) {
@@ -89,6 +87,20 @@ func TestTLSListener(t *testing.T) {
 	}
 }
 
+func dialWebSocketStream(t *testing.T, network, addr, path, protocol string, tlsConfig TLSConfig) net.Conn {
+	t.Helper()
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	conn, err := dialWebSocket(context.Background(), dialer, ClientConfig{
+		Network: network, Addr: addr, Path: path, Subprotocol: protocol,
+		TLS: tlsConfig, Timeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	return conn
+}
+
 func TestWebSocketListener(t *testing.T) {
 	srv := echoLineServer(t, Config{
 		Network:     "ws",
@@ -97,14 +109,8 @@ func TestWebSocketListener(t *testing.T) {
 		Subprotocol: "gnety",
 		Codec:       LineCodec{},
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	c, _, err := websocket.Dial(ctx, "ws://"+srv.Addr()+"/echo", &websocket.DialOptions{Subprotocols: []string{"gnety"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close(websocket.StatusNormalClosure, "")
-	conn := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+	conn := dialWebSocketStream(t, "ws", srv.Addr(), "/echo", "gnety", TLSConfig{})
+	defer conn.Close()
 	if _, err := conn.Write([]byte("ws\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -123,21 +129,52 @@ func TestWSSListener(t *testing.T) {
 		Codec:   LineCodec{},
 		TLS:     TLSConfig{CertFile: certFile, KeyFile: keyFile},
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-	c, _, err := websocket.Dial(ctx, "wss://"+srv.Addr()+"/echo", &websocket.DialOptions{HTTPClient: client})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close(websocket.StatusNormalClosure, "")
-	conn := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+	conn := dialWebSocketStream(t, "wss", srv.Addr(), "/echo", "", TLSConfig{CAFile: certFile})
+	defer conn.Close()
 	if _, err := conn.Write([]byte("wss\n")); err != nil {
 		t.Fatal(err)
 	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil || line != "wss\n" {
 		t.Fatalf("line=%q err=%v", line, err)
+	}
+}
+
+func TestWebSocketClientEcho(t *testing.T) {
+	for _, network := range []string{"ws", "wss"} {
+		t.Run(network, func(t *testing.T) {
+			serverCfg := Config{
+				Network: network, Addr: "127.0.0.1:0", Path: "/echo",
+				Subprotocol: "gnety", Codec: LineCodec{},
+			}
+			clientCfg := ClientConfig{Subprotocol: "gnety", Codec: LineCodec{}}
+			if network == "wss" {
+				certFile, keyFile := testCert(t)
+				serverCfg.TLS = TLSConfig{CertFile: certFile, KeyFile: keyFile}
+				clientCfg.TLS = TLSConfig{CAFile: certFile}
+			}
+			srv := echoLineServer(t, serverCfg)
+			clientCfg.Network = network
+			clientCfg.Addr = srv.Addr()
+			clientCfg.Path = "/echo"
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cli, err := Dial(ctx, clientCfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cli.Close()
+			if cli.LocalAddr() == nil {
+				t.Fatal("expected underlying local address")
+			}
+			if err := cli.Send([]byte("client-" + network)); err != nil {
+				t.Fatal(err)
+			}
+			msg, err := cli.Receive(ctx)
+			if err != nil || string(msg.([]byte)) != "client-"+network {
+				t.Fatalf("msg=%v err=%v", msg, err)
+			}
+		})
 	}
 }
 
@@ -149,10 +186,79 @@ func TestWebSocketSubprotocolRequired(t *testing.T) {
 		Subprotocol: "gnety",
 		Codec:       LineCodec{},
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	for _, offered := range []string{"", "notgnety", "GNETY"} {
+		conn, err := dialWebSocket(context.Background(), &net.Dialer{Timeout: time.Second}, ClientConfig{
+			Network: "ws", Addr: srv.Addr(), Path: "/echo", Subprotocol: offered, Timeout: time.Second,
+		})
+		if err == nil {
+			_ = conn.Close()
+			t.Fatalf("expected dial failure with subprotocol %q", offered)
+		}
+	}
+}
+
+func TestWebSocketFrameLimit(t *testing.T) {
+	srv := echoLineServer(t, Config{
+		Network: "ws", Addr: "127.0.0.1:0", Path: "/echo",
+		Codec: LineCodec{}, MaxFrameSize: 4,
+	})
+	conn := dialWebSocketStream(t, "ws", srv.Addr(), "/echo", "", TLSConfig{})
+	defer conn.Close()
+	if _, err := conn.Write([]byte("12345")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected oversized message to close the connection")
+	}
+}
+
+func TestWebSocketClientFrameLimit(t *testing.T) {
+	srv := echoLineServer(t, Config{
+		Network: "ws", Addr: "127.0.0.1:0", Path: "/echo", Codec: LineCodec{},
+	})
+	cli, err := Dial(context.Background(), ClientConfig{
+		Network: "ws", Addr: srv.Addr(), Path: "/echo", Codec: LineCodec{}, MaxFrameSize: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, _, err := websocket.Dial(ctx, "ws://"+srv.Addr()+"/echo", nil); err == nil {
-		t.Fatal("expected dial failure without subprotocol")
+	if err := cli.Send([]byte("12345\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.Receive(ctx); err != ErrFrameTooLarge {
+		t.Fatalf("expected ErrFrameTooLarge, got %v", err)
+	}
+}
+
+func TestWebSocketClientDialContextCancel(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if conn, acceptErr := ln.Accept(); acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = Dial(ctx, ClientConfig{
+		Network: "ws", Addr: ln.Addr().String(), Codec: LineCodec{}, Timeout: 5 * time.Second,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline, got %v", err)
+	}
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+	case <-time.After(time.Second):
+		t.Fatal("listener did not accept connection")
 	}
 }
 

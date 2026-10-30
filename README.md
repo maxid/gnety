@@ -9,8 +9,8 @@ sockets. Wire-format codecs live in gnety; protocol state machines live in the
 protocol libraries built on top.
 
 > Status: **development snapshot (untagged)** — TCP/UDP/TLS/WS/WSS/DTLS servers and
-> clients, pipeline middleware, frame + CoAP codecs, sessions, request/response
-> correlation and heartbeats. MQTT codec and metrics hooks are on the roadmap;
+> clients, pipeline middleware, frame + MQTT/CoAP codecs, sessions,
+> request/response correlation and heartbeats. Metrics hooks are on the roadmap;
 > the HTTP/WebSocket codec packages are placeholders.
 > No tags are published until a stable release; use commit pseudo-versions.
 > License: MIT. Design notes: [docs/DESIGN.md](docs/DESIGN.md).
@@ -40,7 +40,7 @@ Rules:
 
 **Planned / in progress**
 
-- server bootstrap (done); client connector (TCP/UDP/TCP-TLS, done); reconnect/backpressure (roadmap)
+- server bootstrap (done); client connector (TCP/UDP/TCP-TLS/WS/WSS/DTLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
 - TLS / WebSocket / WSS / DTLS (server + client)
 - protocol codec kit skeleton (`codec/`): HTTP/1.1, WebSocket, MQTT, CoAP (wire format only)
@@ -128,6 +128,7 @@ n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 | Decision | Why |
 |---|---|
 | Stdlib `net` backend first (goroutine per TCP connection) | correct, portable, low dependency; IoT hubs commonly need tens of thousands of connections, which Go handles well |
+| Standard-library-only RFC 6455 WebSocket | no external or legacy WebSocket dependency; separate handshake, frame codec and message/stream stages support fragmentation, control frames and bounded reads |
 | Optional `gnet` backend (roadmap) | event-loop performance for 100k+ connections without changing the public API |
 | Explicit `Codec` / `DatagramCodec` | Go has no annotation reflection pipeline; explicit codecs are testable and fast |
 | Session + `Handler` (`OnOpen/OnMessage/OnClose`) | explicit lifecycle without a framework-specific pipeline |

@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+- Native RFC 6455 WebSocket server/client (standard library only): handshake,
+  frame codec, fragmentation/control frames/UTF-8 validation and bounded reads.
+
+
 - DTLS server/client over UDP using pion/dtls (certificate/CA/mTLS).
 
 

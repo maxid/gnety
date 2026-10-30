@@ -18,15 +18,18 @@ import (
 
 // ClientConfig configures a client connector.
 type ClientConfig struct {
-	Network       string // "tcp", "tcp-tls", "udp" or "dtls"
+	Network       string // "tcp", "tcp-tls", "udp", "dtls", "ws" or "wss"
 	Addr          string
+	Path          string // WebSocket path (default "/")
+	Subprotocol   string // WebSocket subprotocol (optional)
 	Codec         Codec
 	DatagramCodec DatagramCodec
 	TLS           TLSConfig
 	Timeout       time.Duration
+	MaxFrameSize  int // WebSocket inbound message limit (0 = 4 MiB)
 }
 
-// Client is a connected TCP/UDP client.
+// Client is a connected stream or datagram client.
 type Client struct {
 	cfg  ClientConfig
 	conn net.Conn
@@ -80,6 +83,11 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 				conn, err = dtls.Dial("udp", udpAddr, dtlsCfg)
 			}
 		}
+	case "ws", "wss":
+		if cfg.Codec == nil {
+			return nil, errors.New("gnety: WebSocket client requires Codec")
+		}
+		conn, err = dialWebSocket(ctx, dialer, cfg)
 	default:
 		return nil, fmt.Errorf("gnety: unsupported client network %q", cfg.Network)
 	}
