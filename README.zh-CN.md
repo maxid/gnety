@@ -133,6 +133,39 @@ client, _ := gnety.Dial(ctx, gnety.ClientConfig{
 `SO_REUSEADDR` 在多数 Unix 上 Go 已经给 listener 设置，主要用于显式重启和 Windows。
 TCP 专属选项在 UDP 上会被拒绝；DTLS 当前不暴露 socket 选项。
 
+## 自定义 socket
+
+应用自己持有传输层，或需要 gnety 无法创建的 socket 时，直接传入已 bind 的 socket：
+
+```go
+ln, _ := net.Listen("tcp", ":9000")
+srv, _ := gnety.New(gnety.Config{
+    Network:  "tcp",
+    Listener: ln, // Stop 时由 gnety 关闭
+    Codec:    gnety.LengthFieldCodec{},
+})
+
+packet, _ := net.ListenPacket("udp", ":9001")
+udp, _ := gnety.New(gnety.Config{
+    Network: "udp", PacketConn: packet, DatagramCodec: gnety.BytesDatagramCodec{},
+})
+```
+
+`Listener` 是 transport-ready：`tcp-tls`/`wss` 必须已经是 TLS listener（gnety 不再包一层），
+`ws` 则是原始 TCP listener。这样应用可以自己持有 Unix socket、SO_REUSEPORT listener
+或自定义 `net.Listener`。`PacketConn` 只用于 `udp`。
+
+客户端用 `NewClient` 包装任意 `net.Conn`：
+
+```go
+conn, _ := net.Dial("unix", "/tmp/app.sock")
+client, _ := gnety.NewClient(conn, gnety.ClientConfig{
+    Network: "tcp", Codec: gnety.LengthFieldCodec{},
+})
+```
+
+`NewClient` 不负责 dial；连接由调用方持有，直到 `Client.Close`。
+
 请求/响应：
 
 ```go

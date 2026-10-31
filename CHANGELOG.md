@@ -8,6 +8,8 @@
 - Added `SocketOptions` for server and client: `SO_REUSEADDR`, `SO_REUSEPORT`,
   TCP keepalive/nodelay/linger, read/write buffers and a `Control` hook.
   DTLS does not expose socket options yet.
+- Added custom socket injection: `Config.Listener`/`Config.PacketConn` for
+  servers and `NewClient(net.Conn, ClientConfig)` for clients.
 
 
 - `codec/tlv`: the OMA LwM2M TLV wire format (type nibble, 8/16-bit identifier,

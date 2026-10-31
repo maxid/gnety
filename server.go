@@ -34,8 +34,17 @@ type TLSConfig struct {
 type Config struct {
 	// Network is "tcp", "tcp-tls", "udp", "ws" or "wss".
 	Network string
-	// Addr is the listen address, e.g. ":9000" or "127.0.0.1:0".
+	// Addr is the listen address, e.g. ":9000" or "127.0.0.1:0". It is ignored
+	// when Listener or PacketConn is supplied.
 	Addr string
+	// Listener, when non-nil, is used instead of opening a stream listener.
+	// It is transport-ready: for tcp-tls/wss it must already be a TLS listener.
+	// gnety does not wrap it in TLS. Ownership transfers to the Server, which
+	// closes it in Stop.
+	Listener net.Listener
+	// PacketConn, when non-nil, is used instead of opening a UDP listener for
+	// Network "udp". Ownership transfers to the Server.
+	PacketConn net.PacketConn
 	// Socket configures listener and accepted-connection socket options.
 	Socket SocketOptions
 	// Path is the WebSocket path (default "/").
@@ -113,15 +122,25 @@ type Server struct {
 
 // New validates cfg and returns a Server.
 func New(cfg Config) (*Server, error) {
+	if cfg.Listener != nil && cfg.PacketConn != nil {
+		return nil, errors.New("gnety: Listener and PacketConn are mutually exclusive")
+	}
 	switch cfg.Network {
 	case "tcp", "tcp-tls", "ws", "wss":
+		if cfg.PacketConn != nil {
+			return nil, errors.New("gnety: PacketConn is only valid for udp")
+		}
 		if cfg.Codec == nil && cfg.RawHandler == nil {
 			return nil, errors.New("gnety: stream network requires Codec or RawHandler")
 		}
-		if (cfg.Network == "tcp-tls" || cfg.Network == "wss") && (cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
+		if (cfg.Network == "tcp-tls" || cfg.Network == "wss") && cfg.Listener == nil &&
+			(cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
 			return nil, errors.New("gnety: TLS requires CertFile and KeyFile")
 		}
 	case "udp":
+		if cfg.Listener != nil {
+			return nil, errors.New("gnety: Listener is only valid for stream networks")
+		}
 		if cfg.DatagramCodec == nil {
 			return nil, errors.New("gnety: UDP requires DatagramCodec")
 		}
@@ -129,10 +148,13 @@ func New(cfg Config) (*Server, error) {
 			return nil, errors.New("gnety: RawHandler is not supported for UDP")
 		}
 	case "dtls":
+		if cfg.PacketConn != nil {
+			return nil, errors.New("gnety: PacketConn is only valid for udp")
+		}
 		if cfg.DatagramCodec == nil {
 			return nil, errors.New("gnety: DTLS requires DatagramCodec")
 		}
-		if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
+		if cfg.Listener == nil && (cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
 			return nil, errors.New("gnety: DTLS requires CertFile and KeyFile")
 		}
 	default:
@@ -169,55 +191,77 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("gnety: already started")
 	}
 	var err error
-	switch s.cfg.Network {
-	case "tcp":
-		s.ln, err = s.listenTCP(ctx)
-	case "tcp-tls":
-		var tlsCfg *tls.Config
-		tlsCfg, err = loadTLSConfig(s.cfg.TLS)
-		if err == nil {
-			var ln net.Listener
-			ln, err = s.listenTCP(ctx)
+	if s.cfg.Listener != nil {
+		s.ln = s.cfg.Socket.wrapListener(s.cfg.Listener)
+	}
+	if s.cfg.PacketConn != nil {
+		if applyErr := s.cfg.Socket.applyPacketConn(s.cfg.PacketConn); applyErr != nil {
+			err = applyErr
+		} else {
+			s.pc = s.cfg.PacketConn
+		}
+	}
+	if err == nil {
+		switch s.cfg.Network {
+		case "tcp":
+			if s.ln == nil {
+				s.ln, err = s.listenTCP(ctx)
+			}
+		case "tcp-tls":
+			if s.ln == nil {
+				var tlsCfg *tls.Config
+				tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+				if err == nil {
+					var ln net.Listener
+					ln, err = s.listenTCP(ctx)
+					if err == nil {
+						s.ln = tls.NewListener(ln, tlsCfg)
+					}
+				}
+			}
+		case "udp":
+			if s.pc == nil {
+				var pc net.PacketConn
+				pc, err = s.cfg.Socket.listenConfig().ListenPacket(ctx, "udp", s.cfg.Addr)
+				if err == nil {
+					if applyErr := s.cfg.Socket.applyPacketConn(pc); applyErr != nil {
+						_ = pc.Close()
+						err = applyErr
+					} else {
+						s.pc = pc
+					}
+				}
+			}
+		case "dtls":
+			if s.ln == nil {
+				var laddr *net.UDPAddr
+				laddr, err = net.ResolveUDPAddr("udp", s.cfg.Addr)
+				if err == nil {
+					var dtlsCfg *dtls.Config
+					dtlsCfg, err = loadDTLSConfig(s.cfg.TLS, false, s.cfg.Addr)
+					if err == nil {
+						s.ln, err = dtls.Listen("udp", laddr, dtlsCfg)
+					}
+				}
+			}
+		case "ws", "wss":
+			if s.ln == nil {
+				var ln net.Listener
+				ln, err = s.listenTCP(ctx)
+				if err == nil && s.cfg.Network == "wss" {
+					var tlsCfg *tls.Config
+					tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+					if err == nil {
+						ln = tls.NewListener(ln, tlsCfg)
+					} else {
+						_ = ln.Close()
+					}
+				}
+				s.ln = ln
+			}
 			if err == nil {
-				s.ln = tls.NewListener(ln, tlsCfg)
+				s.httpSrv = &http.Server{Handler: s.wsHandler(), ReadHeaderTimeout: 10 * time.Second}
 			}
-		}
-	case "udp":
-		var pc net.PacketConn
-		pc, err = s.cfg.Socket.listenConfig().ListenPacket(ctx, "udp", s.cfg.Addr)
-		if err == nil {
-			if applyErr := s.cfg.Socket.applyPacketConn(pc); applyErr != nil {
-				_ = pc.Close()
-				err = applyErr
-			} else {
-				s.pc = pc
-			}
-		}
-	case "dtls":
-		var laddr *net.UDPAddr
-		laddr, err = net.ResolveUDPAddr("udp", s.cfg.Addr)
-		if err == nil {
-			var dtlsCfg *dtls.Config
-			dtlsCfg, err = loadDTLSConfig(s.cfg.TLS, false, s.cfg.Addr)
-			if err == nil {
-				s.ln, err = dtls.Listen("udp", laddr, dtlsCfg)
-			}
-		}
-	case "ws", "wss":
-		var ln net.Listener
-		ln, err = s.listenTCP(ctx)
-		if err == nil && s.cfg.Network == "wss" {
-			var tlsCfg *tls.Config
-			tlsCfg, err = loadTLSConfig(s.cfg.TLS)
-			if err == nil {
-				ln = tls.NewListener(ln, tlsCfg)
-			} else {
-				_ = ln.Close()
-			}
-		}
-		if err == nil {
-			s.ln = ln
-			s.httpSrv = &http.Server{Handler: s.wsHandler(), ReadHeaderTimeout: 10 * time.Second}
 		}
 	}
 	if err != nil {

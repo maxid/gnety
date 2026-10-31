@@ -137,6 +137,41 @@ client, _ := gnety.Dial(ctx, gnety.ClientConfig{
 useful for explicit restarts and Windows. TCP-only options are rejected on UDP;
 DTLS does not expose socket options in this version.
 
+## Custom sockets
+
+Pass an already-bound socket when an application owns the transport or needs a
+socket type gnety cannot create:
+
+```go
+ln, _ := net.Listen("tcp", ":9000")
+srv, _ := gnety.New(gnety.Config{
+    Network:  "tcp",
+    Listener: ln, // gnety closes it in Stop
+    Codec:    gnety.LengthFieldCodec{},
+})
+
+packet, _ := net.ListenPacket("udp", ":9001")
+udp, _ := gnety.New(gnety.Config{
+    Network: "udp", PacketConn: packet, DatagramCodec: gnety.BytesDatagramCodec{},
+})
+```
+
+`Listener` is transport-ready: for `tcp-tls`/`wss` it must already be a TLS
+listener (gnety does not wrap it); for `ws` it is the raw TCP listener. This
+lets an application own Unix sockets, `SO_REUSEPORT` listeners or a custom
+`net.Listener`. `PacketConn` is only valid for `udp`.
+
+For the client side, `NewClient` wraps any `net.Conn`:
+
+```go
+conn, _ := net.Dial("unix", "/tmp/app.sock")
+client, _ := gnety.NewClient(conn, gnety.ClientConfig{
+    Network: "tcp", Codec: gnety.LengthFieldCodec{},
+})
+```
+
+`NewClient` does not dial; the caller owns the connection until `Client.Close`.
+
 Request/response:
 
 ```go

@@ -140,6 +140,53 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	return c, nil
 }
 
+// NewClient wraps an existing connection instead of dialing. It is the
+// custom-socket entry point: pass a net.Pipe, Unix socket, an already
+// handshaken TLS conn, or any other net.Conn. The caller keeps ownership until
+// Client.Close.
+//
+// Network selects the codec path: tcp/tcp-tls/ws/wss require Codec, udp/dtls
+// require DatagramCodec. Socket options that only make sense while creating a
+// socket (ReuseAddr/ReusePort/Control) are not applied; accepted-connection
+// options (keepalive/nodelay/linger/buffers) are applied when the Conn is a
+// *net.TCPConn.
+func NewClient(conn net.Conn, cfg ClientConfig) (*Client, error) {
+	if conn == nil {
+		return nil, errors.New("gnety: client connection is required")
+	}
+	if cfg.Network == "" {
+		cfg.Network = "tcp"
+	}
+	if err := cfg.Socket.validate(cfg.Network); err != nil {
+		return nil, err
+	}
+	switch cfg.Network {
+	case "tcp", "tcp-tls", "ws", "wss":
+		if cfg.Codec == nil {
+			return nil, errors.New("gnety: stream client requires Codec")
+		}
+	case "udp", "dtls":
+		if cfg.DatagramCodec == nil {
+			return nil, errors.New("gnety: datagram client requires DatagramCodec")
+		}
+	default:
+		return nil, fmt.Errorf("gnety: unsupported client network %q", cfg.Network)
+	}
+	if err := cfg.Socket.applyConn(conn); err != nil {
+		return nil, err
+	}
+	if pc, ok := conn.(net.PacketConn); ok {
+		if err := cfg.Socket.applyPacketConn(pc); err != nil {
+			return nil, err
+		}
+	}
+	c := &Client{cfg: cfg, conn: conn}
+	if cfg.Codec != nil {
+		c.r = bufio.NewReaderSize(conn, 4096)
+	}
+	return c, nil
+}
+
 func clientTLSConfig(cfg TLSConfig, addr string) (*tls.Config, error) {
 	out := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.CAFile != "" {
