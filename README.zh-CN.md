@@ -166,6 +166,33 @@ client, _ := gnety.NewClient(conn, gnety.ClientConfig{
 
 `NewClient` 不负责 dial；连接由调用方持有，直到 `Client.Close`。
 
+## 端口工具
+
+用 bind 探测回答“端口是否被占用”和“下一个可用端口”：
+
+```go
+if gnety.TCPPortInUse(1883) {
+    port, err := gnety.AvailablePort(1883) // >=1883 的第一个空闲 TCP 端口
+}
+
+if gnety.UDPPortInUse(1883) {
+    port, err := gnety.AvailableUDPPort(1883)
+}
+```
+
+需要指定监听地址用 `On` 版本；同一服务的多个端口要共享 `allocated` 集合，
+否则相邻默认端口可能各自顺延到同一个空闲端口：
+
+```go
+allocated := map[int]struct{}{}
+mqtt, _ := gnety.AvailablePortOn("0.0.0.0", 1883, allocated)
+mqttTLS, _ := gnety.AvailablePortOn("0.0.0.0", 8883, allocated)
+```
+
+探测与真正 bind 之间天然有竞争窗口，调用方仍要处理 bind 失败。
+端口 `0` 表示交给系统分配，工具原样返回 `0`；负数或越界返回
+`ErrInvalidPort`，扫到 65535 仍无可用端口返回 `ErrNoAvailablePort`。
+
 请求/响应：
 
 ```go

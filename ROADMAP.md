@@ -12,6 +12,8 @@
 - [x] Metrics hooks (low-cardinality transport/reason events)
 - [x] TLS / WebSocket / WSS listeners
 - [x] channel-style socket options: ReuseAddr/ReusePort, TCP keepalive/nodelay/linger, buffers, Control hook
+- [x] Custom socket injection: Config.Listener/PacketConn, Client NewClient(net.Conn)
+- [x] Port helpers: TCP/UDP bind-probe, next free port, shared allocation set
 - [x] DTLS transport (server/client)
 - [ ] Optional gnet backend + benchmarks
 - [x] Configurable length-field framing (magic/offset/size/endian) and BCD helpers

@@ -172,6 +172,35 @@ client, _ := gnety.NewClient(conn, gnety.ClientConfig{
 
 `NewClient` does not dial; the caller owns the connection until `Client.Close`.
 
+## Port helpers
+
+Bind-probe helpers answer "is this port free?" and "what is the next free port?":
+
+```go
+if gnety.TCPPortInUse(1883) {
+    port, err := gnety.AvailablePort(1883) // first free TCP port >= 1883
+}
+
+if gnety.UDPPortInUse(1883) {
+    port, err := gnety.AvailableUDPPort(1883)
+}
+```
+
+Use the `On` variants to probe a specific host, and a shared `allocated` map
+when several ports belong to one service (otherwise two adjacent defaults can
+both shift onto the same free port):
+
+```go
+allocated := map[int]struct{}{}
+mqtt, _ := gnety.AvailablePortOn("0.0.0.0", 1883, allocated)
+mqttTLS, _ := gnety.AvailablePortOn("0.0.0.0", 8883, allocated)
+```
+
+A probe is inherently racy between the bind check and the real listen; the
+caller must still handle the bind error. Port `0` means "let the OS choose" and
+is returned as `0`; negative or out-of-range ports return `ErrInvalidPort`, and
+an exhausted range returns `ErrNoAvailablePort`.
+
 Request/response:
 
 ```go

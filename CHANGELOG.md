@@ -10,6 +10,8 @@
   DTLS does not expose socket options yet.
 - Added custom socket injection: `Config.Listener`/`Config.PacketConn` for
   servers and `NewClient(net.Conn, ClientConfig)` for clients.
+- Added TCP/UDP port helpers: bind-probe occupancy, next free port and a shared
+  allocation set for adjacent ports.
 
 
 - `codec/tlv`: the OMA LwM2M TLV wire format (type nibble, 8/16-bit identifier,
