@@ -25,6 +25,11 @@ import (
 // ErrMalformedPacket indicates an invalid MQTT packet.
 var ErrMalformedPacket = errors.New("mqtt: malformed packet")
 
+// ErrZeroSubscriptionIdentifier marks a subscription identifier of zero, which
+// MQTT 5 forbids. It is a distinct sentinel because a broker answers it with its
+// own reason code (0x82) instead of treating the packet as undecodable.
+var ErrZeroSubscriptionIdentifier = errors.New("mqtt: subscription identifier is zero")
+
 // MaxRemainingLength is the largest MQTT remaining length (256 MB - 1).
 const MaxRemainingLength = 268435455
 

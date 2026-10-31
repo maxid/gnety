@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"encoding/binary"
+	"fmt"
 	"unicode/utf8"
 
 	"github.com/maxid/gnety/codec/wire"
@@ -323,7 +324,7 @@ func decodePropertyBlock(b []byte, ctx propCtx, where string) (Properties, error
 				return p, err
 			}
 			if id == 0 {
-				return p, malformed("%s subscription identifier is zero", where)
+				return p, fmt.Errorf("%w: %w: %s subscription identifier is zero", ErrMalformedPacket, ErrZeroSubscriptionIdentifier, where)
 			}
 			p.SubscriptionIdentifiers = append(p.SubscriptionIdentifiers, uint32(id))
 		case propSessionExpiryInterval:
