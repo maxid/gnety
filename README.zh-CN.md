@@ -123,6 +123,18 @@ srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: codec, Ha
 n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
 
+## 示例
+
+`examples/` 下有两个可运行的回显服务端，分别使用上文快速开始中的长度前缀 TCP
+编解码器与数据报编解码器：
+
+```sh
+go run ./examples/tcp-echo   # 监听 :9000
+go run ./examples/udp-echo   # 监听 :9001
+```
+
+两者绑定文档中记录的端口并打印实际监听地址；Ctrl-C 停止。
+
 ## 设计选择
 
 | 决策 | 理由 |

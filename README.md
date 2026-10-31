@@ -126,6 +126,19 @@ Broadcast:
 n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
 
+## Examples
+
+Two runnable echo servers live under `examples/`, using the length-prefixed TCP
+codec and the datagram codec from the quick start above:
+
+```sh
+go run ./examples/tcp-echo   # listens on :9000
+go run ./examples/udp-echo   # listens on :9001
+```
+
+Both bind the documented ports and log the actual listen address; stop them
+with Ctrl-C.
+
 ## Design choices
 
 | Decision | Why |
