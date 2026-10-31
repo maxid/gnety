@@ -90,6 +90,10 @@ var propertiesByContext = []struct {
 		TypeDisconnect,
 		Properties{SessionExpiryInterval: 9, ServerReference: "sr", ReasonString: "rs"},
 	},
+	{
+		TypeAuth,
+		Properties{AuthenticationMethod: "m", AuthenticationData: []byte{5, 6}},
+	},
 }
 
 // TestPropertiesRoundTrip encodes and decodes a complete property set per

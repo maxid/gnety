@@ -30,6 +30,9 @@ const (
 	TypePingresp byte = 13
 	// TypeDisconnect is DISCONNECT (14).
 	TypeDisconnect byte = 14
+	// TypeAuth is AUTH (15): one step of an MQTT 5 extended authentication
+	// exchange. MQTT 3.1.1 has no such packet.
+	TypeAuth byte = 15
 )
 
 // Protocol levels understood by the typed codec. MQTT 3.1 (level 3, protocol
@@ -312,6 +315,27 @@ type Disconnect struct {
 // Type reports DISCONNECT.
 func (m Disconnect) Type() byte { return TypeDisconnect }
 
+// Auth is an AUTH packet: one step of the extended authentication exchange a
+// CONNECT started. It exists only in MQTT 5.
+//
+// AUTH carries no payload and every field is optional on the wire: a
+// zero-length body means success with no properties, a one-byte body is a bare
+// reason code, and anything longer adds a property block after the reason code.
+type Auth struct {
+	MessageHeader
+	// ReasonCode reports the state of the exchange: 0x00 success, 0x18 continue
+	// authentication or 0x19 re-authenticate. MQTT 5 lets the reason code and
+	// the property block be omitted when both are at their defaults, so 0x00
+	// with no properties is the empty body.
+	ReasonCode byte
+	// Properties holds the MQTT 5 AUTH properties: the authentication method
+	// and the authentication data, the only two the packet may carry.
+	Properties Properties
+}
+
+// Type reports AUTH.
+func (m Auth) Type() byte { return TypeAuth }
+
 // packetName returns the specification name of a control packet type for error
 // messages.
 func packetName(packetType byte) string {
@@ -344,6 +368,8 @@ func packetName(packetType byte) string {
 		return "PINGRESP"
 	case TypeDisconnect:
 		return "DISCONNECT"
+	case TypeAuth:
+		return "AUTH"
 	default:
 		return "unknown packet"
 	}

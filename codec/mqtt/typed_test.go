@@ -37,6 +37,7 @@ func decodeBytes(t *testing.T, version byte, raw []byte) Message {
 }
 
 // roundTripCases covers every control packet type in both protocol versions.
+// AUTH is the one exception: it exists only in MQTT 5, so it appears once.
 func roundTripCases() []struct {
 	name string
 	msg  Message
@@ -237,6 +238,27 @@ func roundTripCases() []struct {
 					SessionExpiryInterval: 1,
 					ServerReference:       "other:1883",
 					ReasonString:          "taken over",
+				},
+			},
+		},
+		{"v5/auth-empty", &Auth{MessageHeader: v5}},
+		{"v5/auth-continue", &Auth{MessageHeader: v5, ReasonCode: 0x18}},
+		{
+			"v5/auth-reauth-method",
+			&Auth{
+				MessageHeader: v5,
+				ReasonCode:    0x19,
+				Properties:    Properties{AuthenticationMethod: "SCRAM-SHA-1"},
+			},
+		},
+		{
+			"v5/auth-method-data",
+			&Auth{
+				MessageHeader: v5,
+				ReasonCode:    0x18,
+				Properties: Properties{
+					AuthenticationMethod: "SCRAM-SHA-1",
+					AuthenticationData:   []byte{0x01, 0x02, 0x03},
 				},
 			},
 		},
@@ -488,6 +510,55 @@ func goldenCases() []struct {
 			&Disconnect{MessageHeader: MessageHeader{Level: Version311}},
 			[]byte{0xe0, 0x00},
 		},
+		{
+			"auth-v5-empty",
+			&Auth{MessageHeader: MessageHeader{Level: Version5}},
+			[]byte{
+				0xf0, 0x00, // AUTH, remaining length 0: success, no properties
+			},
+		},
+		{
+			"auth-v5-continue",
+			&Auth{MessageHeader: MessageHeader{Level: Version5}, ReasonCode: 0x18},
+			[]byte{
+				0xf0, 0x01, // AUTH, remaining length 1
+				0x18, // continue authentication, properties omitted
+			},
+		},
+		{
+			"auth-v5-method-data",
+			&Auth{
+				MessageHeader: MessageHeader{Level: Version5},
+				ReasonCode:    0x18,
+				Properties: Properties{
+					AuthenticationMethod: "SCRAM-SHA-1",
+					AuthenticationData:   []byte{0x01, 0x02, 0x03},
+				},
+			},
+			[]byte{
+				0xf0, 0x16, // AUTH, remaining length 22
+				0x18, // continue authentication
+				0x14, // property length 20
+				// authentication method "SCRAM-SHA-1"
+				0x15, 0x00, 0x0b, 'S', 'C', 'R', 'A', 'M', '-', 'S', 'H', 'A', '-', '1',
+				// authentication data
+				0x16, 0x00, 0x03, 0x01, 0x02, 0x03,
+			},
+		},
+		{
+			"auth-v5-default-reason-with-properties",
+			&Auth{
+				MessageHeader: MessageHeader{Level: Version5},
+				Properties:    Properties{AuthenticationMethod: "SCRAM-SHA-1"},
+			},
+			[]byte{
+				0xf0, 0x10, // AUTH, remaining length 16
+				0x00, // success, written because properties follow
+				0x0e, // property length 14
+				// authentication method "SCRAM-SHA-1"
+				0x15, 0x00, 0x0b, 'S', 'C', 'R', 'A', 'M', '-', 'S', 'H', 'A', '-', '1',
+			},
+		},
 	}
 }
 
@@ -525,9 +596,9 @@ func TestDecodeErrors(t *testing.T) {
 			kind: wire.KindMalformed,
 		},
 		{
-			name: "packet type 15",
+			name: "AUTH decoded as 3.1.1",
 			wire: []byte{0xf0, 0x00},
-			kind: wire.KindMalformed,
+			kind: wire.KindUnsupported,
 		},
 		{
 			name: "reserved flags on PINGREQ",
@@ -877,6 +948,9 @@ func FuzzDecode(f *testing.F) {
 		}
 		f.Add(buf.Bytes())
 	}
+	// AUTH is MQTT 5 only, so it never comes out of the round-trip table as a
+	// 3.1.1 frame; seed the decoder with a complete exchange step as well.
+	f.Add([]byte{0xf0, 0x0a, 0x18, 0x08, 0x15, 0x00, 0x01, 'm', 0x16, 0x00, 0x01, 0xaa})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d := &Decoder{MaxPacketSize: 1 << 12}
 		r := bufio.NewReader(bytes.NewReader(data))
@@ -888,7 +962,7 @@ func FuzzDecode(f *testing.F) {
 			if m == nil {
 				t.Fatalf("Decode returned no message and no error for % x", data)
 			}
-			if m.Type() < TypeConnect || m.Type() > TypeDisconnect {
+			if m.Type() < TypeConnect || m.Type() > TypeAuth {
 				t.Fatalf("decoded packet type %d", m.Type())
 			}
 			// A decoded packet must always be encodable.

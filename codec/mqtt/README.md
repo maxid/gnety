@@ -24,7 +24,9 @@ err = mqtt.Encode(writer, msg)             // exactly one Write per packet
 - reserved fixed-header flags, QoS > 2, DUP with QoS 0, packet id 0 and a body
   that does not consume its declared remaining length are all rejected;
 - `Decoder.Version` is refreshed from CONNECT, which is how a server switches
-  to the MQTT 5 layout; a client sets `Version` before decoding CONNACK;
+  to the MQTT 5 layout; a client sets `Version` before decoding CONNACK. AUTH is
+  MQTT 5 only, so decoding or encoding it as 3.1.1 reports
+  `wire.KindUnsupported`;
 - truncated input reports `wire.ErrIncomplete` (and still matches `io.EOF`),
   garbage reports `ErrMalformedPacket`, and `wire.KindOf` classifies both.
 
@@ -37,9 +39,13 @@ and optional reason codes, MQTT 3.1.1 packets carry neither and drop the
 
 Messages are plain structs: `Connect`, `Connack`, `Publish`, `Puback`, `Pubrec`,
 `Pubrel`, `Pubcomp`, `Subscribe`, `Suback`, `Unsubscribe`, `Unsuback`, `Pingreq`,
-`Pingresp`, `Disconnect`. `Properties` models the MQTT 5 property set and is
-decoded/encoded as part of each packet; unknown, repeated or packet-incompatible
-property identifiers are rejected.
+`Pingresp`, `Disconnect`, `Auth`. AUTH is the MQTT 5 extended-authentication
+step: a zero-length body is success with no properties, a one-byte body is a
+bare reason code (0x00 success, 0x18 continue authentication, 0x19
+re-authenticate) and a longer body adds a property block, which may carry only
+the authentication method and authentication data. `Properties` models the MQTT 5
+property set and is decoded/encoded as part of each packet; unknown, repeated or
+packet-incompatible property identifiers are rejected.
 
 ## Framing helpers
 

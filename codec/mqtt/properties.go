@@ -114,10 +114,10 @@ type Properties struct {
 	// PUBACK family, SUBACK, UNSUBACK, DISCONNECT).
 	ReasonString string
 	// AuthenticationMethod names the extended authentication method (CONNECT,
-	// CONNACK).
+	// CONNACK, AUTH).
 	AuthenticationMethod string
 	// AuthenticationData carries the extended authentication payload (CONNECT,
-	// CONNACK).
+	// CONNACK, AUTH).
 	AuthenticationData []byte
 
 	// PayloadFormat is the payload format indicator, 0 for unspecified bytes
@@ -152,6 +152,7 @@ const (
 	ctxUnsubscribe
 	ctxUnsuback
 	ctxDisconnect
+	ctxAuth
 )
 
 // propertyDef is the specification entry of one property identifier.
@@ -176,8 +177,8 @@ var propertyDefs = map[byte]propertyDef{
 	propSessionExpiryInterval:       {"session expiry interval", ctxConnect | ctxConnack | ctxDisconnect, false},
 	propAssignedClientID:            {"assigned client identifier", ctxConnack, false},
 	propServerKeepAlive:             {"server keep alive", ctxConnack, false},
-	propAuthenticationMethod:        {"authentication method", ctxConnect | ctxConnack, false},
-	propAuthenticationData:          {"authentication data", ctxConnect | ctxConnack, false},
+	propAuthenticationMethod:        {"authentication method", ctxConnect | ctxConnack | ctxAuth, false},
+	propAuthenticationData:          {"authentication data", ctxConnect | ctxConnack | ctxAuth, false},
 	propRequestProblemInfo:          {"request problem information", ctxConnect, false},
 	propWillDelayInterval:           {"will delay interval", ctxWill, false},
 	propRequestResponseInfo:         {"request response information", ctxConnect, false},
@@ -217,6 +218,8 @@ func contextFor(packetType byte) (propCtx, bool) {
 		return ctxUnsuback, true
 	case TypeDisconnect:
 		return ctxDisconnect, true
+	case TypeAuth:
+		return ctxAuth, true
 	default:
 		return 0, false
 	}

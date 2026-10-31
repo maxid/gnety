@@ -137,6 +137,12 @@ func encodeBody(m Message, version byte) (body []byte, flags byte, err error) {
 	case Disconnect:
 		body, err = encodeDisconnect(v, version)
 		return body, 0, err
+	case *Auth:
+		body, err = encodeAuth(*v, version)
+		return body, 0, err
+	case Auth:
+		body, err = encodeAuth(v, version)
+		return body, 0, err
 	default:
 		return nil, 0, malformed("unsupported message %T", m)
 	}
@@ -401,6 +407,29 @@ func encodeDisconnect(m Disconnect, version byte) ([]byte, error) {
 		return nil, nil
 	}
 	block, err := encodeProperties(nil, m.Properties, TypeDisconnect)
+	if err != nil {
+		return nil, err
+	}
+	empty := len(block) == 1
+	if m.ReasonCode == 0 && empty {
+		return nil, nil
+	}
+	body := make([]byte, 0, 1+len(block))
+	body = append(body, m.ReasonCode)
+	if empty {
+		return body, nil
+	}
+	return append(body, block...), nil
+}
+
+// encodeAuth encodes an AUTH body. MQTT 5 omits the reason code and the
+// property block when both are at their defaults, so a successful AUTH with no
+// properties has no body at all and a reason code alone stays one byte.
+func encodeAuth(m Auth, version byte) ([]byte, error) {
+	if version != Version5 {
+		return nil, unsupported("AUTH in protocol level %d", version)
+	}
+	block, err := encodeProperties(nil, m.Properties, TypeAuth)
 	if err != nil {
 		return nil, err
 	}

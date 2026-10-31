@@ -78,7 +78,7 @@ func (d *Decoder) Decode(r *bufio.Reader) (Message, error) {
 	}
 	packetType := header >> 4
 	flags := header & 0x0f
-	if packetType < TypeConnect || packetType > TypeDisconnect {
+	if packetType < TypeConnect || packetType > TypeAuth {
 		return nil, malformed("unknown control packet type %d", packetType)
 	}
 	remaining, err := ReadRemainingLength(r)
@@ -176,6 +176,8 @@ func decodeBody(rd *wire.Reader, packetType, flags, version byte) (Message, erro
 		return &Pingresp{MessageHeader: MessageHeader{Level: version}}, nil
 	case TypeDisconnect:
 		return decodeDisconnect(rd, version)
+	case TypeAuth:
+		return decodeAuth(rd, version)
 	default:
 		return nil, malformed("unknown control packet type %d", packetType)
 	}
@@ -603,6 +605,31 @@ func decodeDisconnect(rd *wire.Reader, version byte) (*Disconnect, error) {
 	}
 	if rd.Budget() > 0 {
 		if m.Properties, err = readProperties(rd, ctxDisconnect, "DISCONNECT"); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// decodeAuth decodes an AUTH body.
+//
+// MQTT 5 lets the reason code and the property block be omitted when both are at
+// their defaults, so a zero-length body is success with no properties and a
+// one-byte body is a bare reason code.
+func decodeAuth(rd *wire.Reader, version byte) (*Auth, error) {
+	if version != Version5 {
+		return nil, unsupported("AUTH in protocol level %d", version)
+	}
+	m := &Auth{MessageHeader: MessageHeader{Level: version}}
+	if rd.Budget() == 0 {
+		return m, nil
+	}
+	var err error
+	if m.ReasonCode, err = rd.Byte(); err != nil {
+		return nil, wrapErr(err)
+	}
+	if rd.Budget() > 0 {
+		if m.Properties, err = readProperties(rd, ctxAuth, "AUTH"); err != nil {
 			return nil, err
 		}
 	}
