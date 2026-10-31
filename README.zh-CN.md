@@ -94,7 +94,7 @@ srv, _ = gnety.New(gnety.Config{
 
 ## Socket 配置
 
-`Config.Socket` 与 `ClientConfig.Socket` 暴露 Netty 风格的 listener、accept 后
+`Config.Socket` 与 `ClientConfig.Socket` 暴露 channel-style的 listener、accept 后
 连接和 client dial 选项：
 
 | 选项 | 内核设置 |

@@ -97,7 +97,7 @@ srv, _ = gnety.New(gnety.Config{
 
 ## Socket options
 
-`Config.Socket` and `ClientConfig.Socket` expose Netty-style socket options for
+`Config.Socket` and `ClientConfig.Socket` expose channel-style socket options for
 the listener, accepted connections and client dial:
 
 | Option | Kernel setting |
