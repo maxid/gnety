@@ -1,3 +1,5 @@
+English | [简体中文](README.zh-CN.md)
+
 # gnety
 
 A composable **network application framework** for Go: server/client bootstrap,
