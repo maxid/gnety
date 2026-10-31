@@ -95,6 +95,48 @@ srv, _ = gnety.New(gnety.Config{
 })
 ```
 
+## Socket options
+
+`Config.Socket` and `ClientConfig.Socket` expose Netty-style socket options for
+the listener, accepted connections and client dial:
+
+| Option | Kernel setting |
+|---|---|
+| `ReuseAddr` | `SO_REUSEADDR` |
+| `ReusePort` | `SO_REUSEPORT` (Linux/macOS/BSD; Windows rejects it) |
+| `KeepAlive` | `SO_KEEPALIVE`; >0 sets the period, <0 disables |
+| `NoDelay` | `TCP_NODELAY` (`nil` keeps Go's default) |
+| `Linger` | `SO_LINGER`; <0 disables, >0 seconds |
+| `ReadBuffer` / `WriteBuffer` | `SO_RCVBUF` / `SO_SNDBUF` |
+| `Control` | arbitrary `syscall.RawConn` options, e.g. `TCP_FASTOPEN` |
+
+```go
+noDelay := false
+srv, _ := gnety.New(gnety.Config{
+    Network: "tcp", Addr: ":9000", Codec: gnety.LengthFieldCodec{},
+    Socket: gnety.SocketOptions{
+        ReuseAddr:   true,
+        ReusePort:   true,
+        KeepAlive:   30 * time.Second,
+        NoDelay:     &noDelay,
+        Linger:      -1,
+        ReadBuffer:  64 << 10,
+        WriteBuffer: 64 << 10,
+    },
+})
+
+client, _ := gnety.Dial(ctx, gnety.ClientConfig{
+    Network: "tcp", Addr: "127.0.0.1:9000", Codec: gnety.LengthFieldCodec{},
+    LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1")},
+    Socket: gnety.SocketOptions{KeepAlive: 30 * time.Second},
+})
+```
+
+`SO_REUSEPORT` is opt-in; every listener sharing the port must enable it.
+`SO_REUSEADDR` is already set by Go for many Unix listeners, so it is mainly
+useful for explicit restarts and Windows. TCP-only options are rejected on UDP;
+DTLS does not expose socket options in this version.
+
 Request/response:
 
 ```go

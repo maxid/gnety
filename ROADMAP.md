@@ -11,6 +11,7 @@
 - [x] Protocol codec kit: MQTT, CoAP, HTTP/WebSocket, Modbus MBAP+PDU and LwM2M TLV wire formats
 - [x] Metrics hooks (low-cardinality transport/reason events)
 - [x] TLS / WebSocket / WSS listeners
+- [x] Netty-style socket options: ReuseAddr/ReusePort, TCP keepalive/nodelay/linger, buffers, Control hook
 - [x] DTLS transport (server/client)
 - [ ] Optional gnet backend + benchmarks
 - [x] Configurable length-field framing (magic/offset/size/endian) and BCD helpers

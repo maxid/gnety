@@ -36,6 +36,8 @@ type Config struct {
 	Network string
 	// Addr is the listen address, e.g. ":9000" or "127.0.0.1:0".
 	Addr string
+	// Socket configures listener and accepted-connection socket options.
+	Socket SocketOptions
 	// Path is the WebSocket path (default "/").
 	Path string
 	// Subprotocol is the required WebSocket subprotocol (optional).
@@ -136,6 +138,9 @@ func New(cfg Config) (*Server, error) {
 	default:
 		return nil, fmt.Errorf("gnety: unsupported network %q", cfg.Network)
 	}
+	if err := cfg.Socket.validate(cfg.Network); err != nil {
+		return nil, err
+	}
 	if cfg.Handler == nil {
 		cfg.Handler = HandlerFuncs{}
 	}
@@ -155,6 +160,9 @@ func New(cfg Config) (*Server, error) {
 
 // Start starts listening. It returns once the socket is ready.
 func (s *Server) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
@@ -163,15 +171,28 @@ func (s *Server) Start(ctx context.Context) error {
 	var err error
 	switch s.cfg.Network {
 	case "tcp":
-		s.ln, err = net.Listen("tcp", s.cfg.Addr)
+		s.ln, err = s.listenTCP(ctx)
 	case "tcp-tls":
 		var tlsCfg *tls.Config
 		tlsCfg, err = loadTLSConfig(s.cfg.TLS)
 		if err == nil {
-			s.ln, err = tls.Listen("tcp", s.cfg.Addr, tlsCfg)
+			var ln net.Listener
+			ln, err = s.listenTCP(ctx)
+			if err == nil {
+				s.ln = tls.NewListener(ln, tlsCfg)
+			}
 		}
 	case "udp":
-		s.pc, err = net.ListenPacket("udp", s.cfg.Addr)
+		var pc net.PacketConn
+		pc, err = s.cfg.Socket.listenConfig().ListenPacket(ctx, "udp", s.cfg.Addr)
+		if err == nil {
+			if applyErr := s.cfg.Socket.applyPacketConn(pc); applyErr != nil {
+				_ = pc.Close()
+				err = applyErr
+			} else {
+				s.pc = pc
+			}
+		}
 	case "dtls":
 		var laddr *net.UDPAddr
 		laddr, err = net.ResolveUDPAddr("udp", s.cfg.Addr)
@@ -184,7 +205,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	case "ws", "wss":
 		var ln net.Listener
-		ln, err = net.Listen("tcp", s.cfg.Addr)
+		ln, err = s.listenTCP(ctx)
 		if err == nil && s.cfg.Network == "wss" {
 			var tlsCfg *tls.Config
 			tlsCfg, err = loadTLSConfig(s.cfg.TLS)
@@ -235,6 +256,17 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// listenTCP opens a TCP listener with the configured socket options and wraps
+// accepted connections so TCP-level options are applied before any TLS or
+// WebSocket layer wraps them.
+func (s *Server) listenTCP(ctx context.Context) (net.Listener, error) {
+	ln, err := s.cfg.Socket.listenConfig().Listen(ctx, "tcp", s.cfg.Addr)
+	if err != nil {
+		return nil, err
+	}
+	return s.cfg.Socket.wrapListener(ln), nil
 }
 
 // Addr returns the actual listen address.

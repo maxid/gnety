@@ -37,6 +37,10 @@ func dialWebSocket(ctx context.Context, dialer *net.Dialer, cfg ClientConfig) (n
 	if err != nil {
 		return nil, err
 	}
+	if err := cfg.Socket.applyConn(raw); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
 	if cfg.Network == "wss" {
 		tlsCfg, cfgErr := clientTLSConfig(cfg.TLS, cfg.Addr)
 		if cfgErr != nil {

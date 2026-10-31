@@ -22,6 +22,8 @@ import (
 type ClientConfig struct {
 	Network       string // "tcp", "tcp-tls", "udp", "dtls", "ws" or "wss"
 	Addr          string
+	LocalAddr     net.Addr // optional local bind address for TCP/UDP/WS
+	Socket        SocketOptions
 	Path          string // WebSocket path (default "/")
 	Subprotocol   string // WebSocket subprotocol (optional)
 	Origin        string // WebSocket Origin override (optional)
@@ -49,7 +51,13 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Second
 	}
-	dialer := &net.Dialer{Timeout: cfg.Timeout}
+	if err := cfg.Socket.validate(cfg.Network); err != nil {
+		return nil, err
+	}
+	if cfg.Network == "dtls" && cfg.LocalAddr != nil {
+		return nil, fmt.Errorf("%w: DTLS local bind address is not supported", ErrSocketOptionsUnsupported)
+	}
+	dialer := cfg.Socket.dialer(cfg.Timeout, cfg.LocalAddr)
 	var (
 		conn net.Conn
 		err  error
@@ -60,6 +68,12 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 			return nil, errors.New("gnety: TCP client requires Codec")
 		}
 		conn, err = dialer.DialContext(ctx, "tcp", cfg.Addr)
+		if err == nil {
+			if applyErr := cfg.Socket.applyConn(conn); applyErr != nil {
+				_ = conn.Close()
+				return nil, applyErr
+			}
+		}
 	case "tcp-tls":
 		if cfg.Codec == nil {
 			return nil, errors.New("gnety: TCP client requires Codec")
@@ -68,12 +82,33 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		if cfgErr != nil {
 			return nil, cfgErr
 		}
-		conn, err = tls.DialWithDialer(dialer, "tcp", cfg.Addr, tlsCfg)
+		var raw net.Conn
+		raw, err = dialer.DialContext(ctx, "tcp", cfg.Addr)
+		if err == nil {
+			if applyErr := cfg.Socket.applyConn(raw); applyErr != nil {
+				_ = raw.Close()
+				return nil, applyErr
+			}
+			tlsConn := tls.Client(raw, tlsCfg)
+			if handshakeErr := tlsConn.HandshakeContext(ctx); handshakeErr != nil {
+				_ = raw.Close()
+				return nil, handshakeErr
+			}
+			conn = tlsConn
+		}
 	case "udp":
 		if cfg.DatagramCodec == nil {
 			return nil, errors.New("gnety: UDP client requires DatagramCodec")
 		}
 		conn, err = dialer.DialContext(ctx, "udp", cfg.Addr)
+		if err == nil {
+			if udp, ok := conn.(net.PacketConn); ok {
+				if applyErr := cfg.Socket.applyPacketConn(udp); applyErr != nil {
+					_ = conn.Close()
+					return nil, applyErr
+				}
+			}
+		}
 	case "dtls":
 		if cfg.DatagramCodec == nil {
 			return nil, errors.New("gnety: DTLS client requires DatagramCodec")

@@ -92,6 +92,47 @@ srv, _ = gnety.New(gnety.Config{
 })
 ```
 
+## Socket 配置
+
+`Config.Socket` 与 `ClientConfig.Socket` 暴露 Netty 风格的 listener、accept 后
+连接和 client dial 选项：
+
+| 选项 | 内核设置 |
+|---|---|
+| `ReuseAddr` | `SO_REUSEADDR` |
+| `ReusePort` | `SO_REUSEPORT`（Linux/macOS/BSD；Windows 明确拒绝） |
+| `KeepAlive` | `SO_KEEPALIVE`；>0 设周期，<0 关闭 |
+| `NoDelay` | `TCP_NODELAY`（`nil` 保留 Go 默认） |
+| `Linger` | `SO_LINGER`；<0 关闭，>0 秒 |
+| `ReadBuffer` / `WriteBuffer` | `SO_RCVBUF` / `SO_SNDBUF` |
+| `Control` | 任意 `syscall.RawConn` 选项，如 `TCP_FASTOPEN` |
+
+```go
+noDelay := false
+srv, _ := gnety.New(gnety.Config{
+    Network: "tcp", Addr: ":9000", Codec: gnety.LengthFieldCodec{},
+    Socket: gnety.SocketOptions{
+        ReuseAddr:   true,
+        ReusePort:   true,
+        KeepAlive:   30 * time.Second,
+        NoDelay:     &noDelay,
+        Linger:      -1,
+        ReadBuffer:  64 << 10,
+        WriteBuffer: 64 << 10,
+    },
+})
+
+client, _ := gnety.Dial(ctx, gnety.ClientConfig{
+    Network: "tcp", Addr: "127.0.0.1:9000", Codec: gnety.LengthFieldCodec{},
+    LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1")},
+    Socket: gnety.SocketOptions{KeepAlive: 30 * time.Second},
+})
+```
+
+`SO_REUSEPORT` 是显式开启的；共享同一端口的 listener 都要开启。
+`SO_REUSEADDR` 在多数 Unix 上 Go 已经给 listener 设置，主要用于显式重启和 Windows。
+TCP 专属选项在 UDP 上会被拒绝；DTLS 当前不暴露 socket 选项。
+
 请求/响应：
 
 ```go
