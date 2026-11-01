@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+- `codec/coap`: added `CodeRequestEntityIncomplete` (4.08), the answer to a block-wise request body whose blocks are missing or out of order (RFC 7959).
+
 - `codec/modbus`: added the Modbus RTU wire format — `RTUFrame`, `CRC16`, whole-datagram `Parse`, direction-aware stream readers (`Read`/`ReadResponse`) whose frame length comes from the function code, typed `ReadTypedRequest`/`ReadTypedResponse`, and `RTUOptions{NoCRC}` for gateways that strip the checksum. Added `Frame.Parse` for whole MBAP datagrams.
 - `codec/modbus`: added typed PDUs for 0x16 Mask Write Register, 0x17 Read/Write Multiple Registers and 0x2B/0x0E Read Device Identification, with the matching response checks.
 - `codec/modbus`: added `Functions`, a function-code registry that decodes vendor codes (or replaces a standard code's payload) before the built-in decoder, including PDU-length hooks for RTU streams.

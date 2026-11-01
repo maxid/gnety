@@ -100,6 +100,10 @@ const (
 	CodeMethodNotAllowed Code = 133
 	// CodePreconditionFailed is 4.12 Precondition Failed.
 	CodePreconditionFailed Code = 140
+	// CodeRequestEntityIncomplete is 4.08 Request Entity Incomplete, the answer
+	// to a block-wise request body whose blocks are missing or out of order
+	// (RFC 7959).
+	CodeRequestEntityIncomplete Code = 136
 	// CodeRequestEntityTooLarge is 4.13 Request Entity Too Large.
 	CodeRequestEntityTooLarge Code = 141
 	// CodeUnsupportedContentFormat is 4.15 Unsupported Content-Format.

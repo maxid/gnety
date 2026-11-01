@@ -378,6 +378,7 @@ func TestCodeClassification(t *testing.T) {
 		{CodeNotFound, 4, 4, "4.04", false, true},
 		{CodeMethodNotAllowed, 4, 5, "4.05", false, true},
 		{CodePreconditionFailed, 4, 12, "4.12", false, true},
+		{CodeRequestEntityIncomplete, 4, 8, "4.08", false, true},
 		{CodeRequestEntityTooLarge, 4, 13, "4.13", false, true},
 		{CodeUnsupportedContentFormat, 4, 15, "4.15", false, true},
 		{CodeInternalServerError, 5, 0, "5.00", false, true},
@@ -400,6 +401,7 @@ func TestCodeClassification(t *testing.T) {
 		}
 	}
 	if CodeCreated != 65 || CodeContent != 69 || CodePreconditionFailed != 140 ||
+		CodeRequestEntityIncomplete != 136 ||
 		CodeRequestEntityTooLarge != 141 || CodeUnsupportedContentFormat != 143 ||
 		CodeServiceUnavailable != 163 {
 		t.Fatal("a named response code has the wrong numeric value")
