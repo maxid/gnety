@@ -59,8 +59,15 @@ type Config struct {
 	// AllowAnyOrigin disables Origin verification. Use only for non-browser
 	// device gateways where Origin is not a security boundary.
 	AllowAnyOrigin bool
-	// TLS configures "tcp-tls"/"wss" listeners.
+	// TLS configures "tcp-tls"/"wss" listeners from files.
 	TLS TLSConfig
+	// TLSConfig, when non-nil, replaces the file-based TLS configuration for
+	// "tcp-tls" and "wss". The server uses it as given; the caller keeps
+	// ownership.
+	TLSConfig *tls.Config
+	// DTLSConfig, when non-nil, replaces the file-based DTLS configuration for
+	// "dtls". The server uses it as given; the caller keeps ownership.
+	DTLSConfig *dtls.Config
 	// Codec is required for TCP.
 	Codec Codec
 	// DatagramCodec is required for UDP.
@@ -133,9 +140,9 @@ func New(cfg Config) (*Server, error) {
 		if cfg.Codec == nil && cfg.RawHandler == nil {
 			return nil, errors.New("gnety: stream network requires Codec or RawHandler")
 		}
-		if (cfg.Network == "tcp-tls" || cfg.Network == "wss") && cfg.Listener == nil &&
+		if (cfg.Network == "tcp-tls" || cfg.Network == "wss") && cfg.Listener == nil && cfg.TLSConfig == nil &&
 			(cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
-			return nil, errors.New("gnety: TLS requires CertFile and KeyFile")
+			return nil, errors.New("gnety: TLS requires TLSConfig or CertFile and KeyFile")
 		}
 	case "udp":
 		if cfg.Listener != nil {
@@ -154,8 +161,8 @@ func New(cfg Config) (*Server, error) {
 		if cfg.DatagramCodec == nil {
 			return nil, errors.New("gnety: DTLS requires DatagramCodec")
 		}
-		if cfg.Listener == nil && (cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
-			return nil, errors.New("gnety: DTLS requires CertFile and KeyFile")
+		if cfg.Listener == nil && cfg.DTLSConfig == nil && (cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "") {
+			return nil, errors.New("gnety: DTLS requires DTLSConfig or CertFile and KeyFile")
 		}
 	default:
 		return nil, fmt.Errorf("gnety: unsupported network %q", cfg.Network)
@@ -209,8 +216,10 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		case "tcp-tls":
 			if s.ln == nil {
-				var tlsCfg *tls.Config
-				tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+				tlsCfg := s.cfg.TLSConfig
+				if tlsCfg == nil {
+					tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+				}
 				if err == nil {
 					var ln net.Listener
 					ln, err = s.listenTCP(ctx)
@@ -237,8 +246,10 @@ func (s *Server) Start(ctx context.Context) error {
 				var laddr *net.UDPAddr
 				laddr, err = net.ResolveUDPAddr("udp", s.cfg.Addr)
 				if err == nil {
-					var dtlsCfg *dtls.Config
-					dtlsCfg, err = loadDTLSConfig(s.cfg.TLS, false, s.cfg.Addr)
+					dtlsCfg := s.cfg.DTLSConfig
+					if dtlsCfg == nil {
+						dtlsCfg, err = loadDTLSConfig(s.cfg.TLS, false, s.cfg.Addr)
+					}
 					if err == nil {
 						s.ln, err = dtls.Listen("udp", laddr, dtlsCfg)
 					}
@@ -249,8 +260,10 @@ func (s *Server) Start(ctx context.Context) error {
 				var ln net.Listener
 				ln, err = s.listenTCP(ctx)
 				if err == nil && s.cfg.Network == "wss" {
-					var tlsCfg *tls.Config
-					tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+					tlsCfg := s.cfg.TLSConfig
+					if tlsCfg == nil {
+						tlsCfg, err = loadTLSConfig(s.cfg.TLS)
+					}
 					if err == nil {
 						ln = tls.NewListener(ln, tlsCfg)
 					} else {

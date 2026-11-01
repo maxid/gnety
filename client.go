@@ -29,10 +29,18 @@ type ClientConfig struct {
 	Origin        string // WebSocket Origin override (optional)
 	Codec         Codec
 	DatagramCodec DatagramCodec
-	TLS           TLSConfig
-	Timeout       time.Duration
-	WriteTimeout  time.Duration
-	MaxFrameSize  int // WebSocket inbound message limit (0 = 4 MiB)
+	// TLS configures "tcp-tls"/"wss" clients from files.
+	TLS TLSConfig
+	// TLSConfig, when non-nil, replaces the file-based TLS configuration for
+	// "tcp-tls" and "wss". The client clones it and fills ServerName from Addr
+	// when it is empty.
+	TLSConfig *tls.Config
+	// DTLSConfig, when non-nil, replaces the file-based DTLS configuration for
+	// "dtls". The client uses it as given; the caller keeps ownership.
+	DTLSConfig   *dtls.Config
+	Timeout      time.Duration
+	WriteTimeout time.Duration
+	MaxFrameSize int // WebSocket inbound message limit (0 = 4 MiB)
 }
 
 // Client is a connected stream or datagram client.
@@ -78,7 +86,7 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		if cfg.Codec == nil {
 			return nil, errors.New("gnety: TCP client requires Codec")
 		}
-		tlsCfg, cfgErr := clientTLSConfig(cfg.TLS, cfg.Addr)
+		tlsCfg, cfgErr := tlsClientConfig(cfg, cfg.Addr)
 		if cfgErr != nil {
 			return nil, cfgErr
 		}
@@ -116,8 +124,10 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		var udpAddr *net.UDPAddr
 		udpAddr, err = net.ResolveUDPAddr("udp", cfg.Addr)
 		if err == nil {
-			var dtlsCfg *dtls.Config
-			dtlsCfg, err = loadDTLSConfig(cfg.TLS, true, cfg.Addr)
+			dtlsCfg := cfg.DTLSConfig
+			if dtlsCfg == nil {
+				dtlsCfg, err = loadDTLSConfig(cfg.TLS, true, cfg.Addr)
+			}
 			if err == nil {
 				conn, err = dtls.Dial("udp", udpAddr, dtlsCfg)
 			}
@@ -187,6 +197,23 @@ func NewClient(conn net.Conn, cfg ClientConfig) (*Client, error) {
 	return c, nil
 }
 
+// tlsClientConfig returns the TLS configuration for a client dial: the
+// in-memory override when present, otherwise the file-based one. The override
+// is cloned so a caller's config is never mutated, and ServerName is filled
+// from the dial address when the caller left it empty.
+func tlsClientConfig(cfg ClientConfig, addr string) (*tls.Config, error) {
+	if cfg.TLSConfig != nil {
+		out := cfg.TLSConfig.Clone()
+		if out.ServerName == "" {
+			if host, _, err := net.SplitHostPort(addr); err == nil && net.ParseIP(host) == nil {
+				out.ServerName = host
+			}
+		}
+		return out, nil
+	}
+	return clientTLSConfig(cfg.TLS, addr)
+}
+
 func clientTLSConfig(cfg TLSConfig, addr string) (*tls.Config, error) {
 	out := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.CAFile != "" {
@@ -254,6 +281,21 @@ func (c *Client) Receive(ctx context.Context) (any, error) {
 		return c.cfg.DatagramCodec.Decode(buf[:n])
 	}
 	return c.cfg.Codec.Decode(c.r)
+}
+
+// SetDeadline sets the read and write deadline on the underlying connection.
+//
+// A protocol library uses it to bound one request/response attempt and to abort
+// an in-flight Receive or Send by moving the deadline into the past. The
+// deadline stays in force until the next call or until the connection is
+// replaced; Client.Send only overrides the write side when WriteTimeout is set.
+func (c *Client) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return ErrSessionClosed
+	}
+	return c.conn.SetDeadline(t)
 }
 
 // Close closes the connection.
