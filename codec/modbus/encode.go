@@ -209,3 +209,110 @@ func coilWire(value bool) uint16 {
 	}
 	return 0x0000
 }
+
+// encodeMaskWrite builds the 0x16 request and its echo response: function code,
+// address and the two masks.
+func encodeMaskWrite(address, andMask, orMask uint16) ([]byte, error) {
+	w := wire.NewWriter(7)
+	w.Byte(FuncMaskWriteRegister)
+	w.Uint16(binary.BigEndian, address)
+	w.Uint16(binary.BigEndian, andMask)
+	w.Uint16(binary.BigEndian, orMask)
+	return w.Bytes(), nil
+}
+
+// encodeReadWriteMultipleRegisters builds the 0x17 request: function code, the
+// read range, the write range, the write byte count and the values.
+func encodeReadWriteMultipleRegisters(m ReadWriteMultipleRegistersRequest) ([]byte, error) {
+	if err := checkQuantity("read/write multiple registers read", m.ReadQuantity, MaxReadRegisters); err != nil {
+		return nil, err
+	}
+	if err := checkQuantity("read/write multiple registers write", uint16(len(m.WriteValues)), MaxWriteReadRegisters); err != nil {
+		return nil, err
+	}
+	w := wire.NewWriter(10 + 2*len(m.WriteValues))
+	w.Byte(FuncReadWriteMultipleRegisters)
+	w.Uint16(binary.BigEndian, m.ReadAddress)
+	w.Uint16(binary.BigEndian, m.ReadQuantity)
+	w.Uint16(binary.BigEndian, m.WriteAddress)
+	w.Uint16(binary.BigEndian, uint16(len(m.WriteValues)))
+	w.Byte(byte(2 * len(m.WriteValues)))
+	for _, v := range m.WriteValues {
+		w.Uint16(binary.BigEndian, v)
+	}
+	return w.Bytes(), nil
+}
+
+// checkDeviceIDReadCode enforces the four read-device-identification codes.
+func checkDeviceIDReadCode(code byte) error {
+	switch code {
+	case DeviceIDBasic, DeviceIDRegular, DeviceIDExtended, DeviceIDIndividual:
+		return nil
+	default:
+		return malformed("read device identification code %#02x is outside 0x01..0x04", code)
+	}
+}
+
+// validDeviceIDConformity reports whether level is one of the conformity values
+// the specification defines, with or without individual access.
+func validDeviceIDConformity(level byte) bool {
+	switch level {
+	case 0x01, 0x02, 0x03, 0x81, 0x82, 0x83:
+		return true
+	default:
+		return false
+	}
+}
+
+// encodeDeviceIDRequest builds the 0x2B/0x0E request: function code, MEI type,
+// read code and object id.
+func encodeDeviceIDRequest(readCode, objectID byte) ([]byte, error) {
+	if err := checkDeviceIDReadCode(readCode); err != nil {
+		return nil, err
+	}
+	w := wire.NewWriter(5)
+	w.Byte(FuncEncapsulatedInterface)
+	w.Byte(MEIReadDeviceIdentification)
+	w.Byte(readCode)
+	w.Byte(objectID)
+	return w.Bytes(), nil
+}
+
+// encodeDeviceIDResponse builds the 0x2B/0x0E response: function code, MEI type,
+// read code, conformity level, more-follows, next object id, object count and
+// the objects.
+func encodeDeviceIDResponse(m ReadDeviceIdentificationResponse) ([]byte, error) {
+	if err := checkDeviceIDReadCode(m.ReadCode); err != nil {
+		return nil, err
+	}
+	if !validDeviceIDConformity(m.ConformityLevel) {
+		return nil, malformed("read device identification conformity level %#02x is outside 0x01..0x83", m.ConformityLevel)
+	}
+	if len(m.Objects) > 0xff {
+		return nil, tooLarge("read device identification carries %d objects, want at most 255", len(m.Objects))
+	}
+	w := wire.NewWriter(7 + 2*len(m.Objects))
+	w.Byte(FuncEncapsulatedInterface)
+	w.Byte(MEIReadDeviceIdentification)
+	w.Byte(m.ReadCode)
+	w.Byte(m.ConformityLevel)
+	if m.MoreFollows {
+		w.Byte(0xff)
+	} else {
+		w.Byte(0x00)
+	}
+	w.Byte(m.NextObjectID)
+	w.Byte(byte(len(m.Objects)))
+	for _, object := range m.Objects {
+		if len(object.Value) > 0xff {
+			return nil, tooLarge("read device identification object %#02x carries %d bytes, want at most 255", object.ID, len(object.Value))
+		}
+		w.Byte(object.ID)
+		w.Byte(byte(len(object.Value)))
+		w.Raw(object.Value)
+	}
+	if w.Len() > MaxPDU {
+		return nil, tooLarge("read device identification PDU of %d bytes exceeds %d", w.Len(), MaxPDU)
+	}
+	return w.Bytes(), nil
+}

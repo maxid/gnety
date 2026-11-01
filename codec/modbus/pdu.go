@@ -36,6 +36,41 @@ const (
 	// MaxWriteRegisters is the largest number of registers one
 	// write-multiple-registers request may carry (function code 0x10).
 	MaxWriteRegisters = 123
+	// MaxWriteReadRegisters is the largest number of registers one
+	// read/write-multiple-registers request may write (function code 0x17);
+	// the read and write fields share one PDU, so the write side is smaller
+	// than MaxWriteRegisters.
+	MaxWriteReadRegisters = 121
+)
+
+// Device identification read codes (0x2B/0x0E).
+const (
+	// DeviceIDBasic returns the basic identification objects 0x00 to 0x02.
+	DeviceIDBasic byte = 0x01
+	// DeviceIDRegular returns the regular identification objects 0x00 to 0x05.
+	DeviceIDRegular byte = 0x02
+	// DeviceIDExtended returns all identification objects.
+	DeviceIDExtended byte = 0x03
+	// DeviceIDIndividual returns the one object named in the request.
+	DeviceIDIndividual byte = 0x04
+)
+
+// Device identification object ids.
+const (
+	// DeviceIDVendorName is the vendor name object.
+	DeviceIDVendorName byte = 0x00
+	// DeviceIDProductCode is the product code object.
+	DeviceIDProductCode byte = 0x01
+	// DeviceIDMajorMinorRevision is the revision object.
+	DeviceIDMajorMinorRevision byte = 0x02
+	// DeviceIDVendorURL is the vendor URL object.
+	DeviceIDVendorURL byte = 0x03
+	// DeviceIDProductName is the product name object.
+	DeviceIDProductName byte = 0x04
+	// DeviceIDModelName is the model name object.
+	DeviceIDModelName byte = 0x05
+	// DeviceIDUserApplicationName is the user application name object.
+	DeviceIDUserApplicationName byte = 0x06
 )
 
 // ReadCoilsRequest is a 0x01 request: read the on/off state of a range of
@@ -364,4 +399,161 @@ func (m WriteMultipleRegistersResponse) Function() byte { return FuncWriteMultip
 // PDU encodes the response as five bytes: function code, address and quantity.
 func (m WriteMultipleRegistersResponse) PDU() ([]byte, error) {
 	return encodeWriteMultipleAck(FuncWriteMultipleRegisters, "write multiple registers response", m.Address, m.Quantity, MaxWriteRegisters)
+}
+
+// MaskWriteRegister is a 0x16 request: apply an AND mask and then an OR mask to
+// one holding register. The response repeats the same three fields.
+//
+// The resulting value is (current AND AndMask) OR (OrMask AND NOT AndMask).
+type MaskWriteRegister struct {
+	// Address is the holding register, 0 to 0xFFFF.
+	Address uint16
+	// AndMask is the AND mask.
+	AndMask uint16
+	// OrMask is the OR mask.
+	OrMask uint16
+}
+
+// Function reports function code 0x16.
+func (m MaskWriteRegister) Function() byte { return FuncMaskWriteRegister }
+
+// PDU encodes the request or its echo response as seven bytes: function code,
+// address, AND mask and OR mask.
+func (m MaskWriteRegister) PDU() ([]byte, error) {
+	return encodeMaskWrite(m.Address, m.AndMask, m.OrMask)
+}
+
+// responseSpec reports the echo a mask-write request expects.
+func (m MaskWriteRegister) responseSpec() (requestSpec, error) {
+	return requestSpec{
+		function: FuncMaskWriteRegister,
+		kind:     expectMaskWrite,
+		address:  m.Address,
+		andMask:  m.AndMask,
+		orMask:   m.OrMask,
+	}, nil
+}
+
+// ReadWriteMultipleRegistersRequest is a 0x17 request: write one range of
+// holding registers and read another in the same transaction. The write is
+// applied before the read.
+type ReadWriteMultipleRegistersRequest struct {
+	// ReadAddress is the first register to read, 0 to 0xFFFF.
+	ReadAddress uint16
+	// ReadQuantity is the number of registers to read, 1 to MaxReadRegisters.
+	ReadQuantity uint16
+	// WriteAddress is the first register to write, 0 to 0xFFFF.
+	WriteAddress uint16
+	// WriteValues holds one 16-bit value per register, 1 to
+	// MaxWriteReadRegisters entries.
+	WriteValues []uint16
+}
+
+// Function reports function code 0x17.
+func (m ReadWriteMultipleRegistersRequest) Function() byte { return FuncReadWriteMultipleRegisters }
+
+// PDU encodes the request as function code, both ranges, the write byte count
+// and the big-endian write values.
+func (m ReadWriteMultipleRegistersRequest) PDU() ([]byte, error) {
+	return encodeReadWriteMultipleRegisters(m)
+}
+
+// responseSpec reports the register read a 0x17 request expects.
+func (m ReadWriteMultipleRegistersRequest) responseSpec() (requestSpec, error) {
+	if err := checkQuantity("read/write multiple registers read", m.ReadQuantity, MaxReadRegisters); err != nil {
+		return requestSpec{}, err
+	}
+	if err := checkQuantity("read/write multiple registers write", uint16(len(m.WriteValues)), MaxWriteReadRegisters); err != nil {
+		return requestSpec{}, err
+	}
+	return requestSpec{
+		function: FuncReadWriteMultipleRegisters,
+		kind:     expectRegisters,
+		quantity: m.ReadQuantity,
+	}, nil
+}
+
+// ReadWriteMultipleRegistersResponse is a 0x17 response: the registers read
+// after the write was applied.
+type ReadWriteMultipleRegistersResponse struct {
+	// Registers holds the read values in request order.
+	Registers []uint16
+}
+
+// Function reports function code 0x17.
+func (m ReadWriteMultipleRegistersResponse) Function() byte { return FuncReadWriteMultipleRegisters }
+
+// PDU encodes the response as the function code, a byte count and the
+// big-endian registers.
+func (m ReadWriteMultipleRegistersResponse) PDU() ([]byte, error) {
+	return encodeRegistersResponse(FuncReadWriteMultipleRegisters, "read/write multiple registers response", m.Registers, MaxReadRegisters)
+}
+
+// DeviceObject is one object in a read-device-identification response.
+type DeviceObject struct {
+	// ID is the object id, for example DeviceIDVendorName.
+	ID byte
+	// Value is the object payload, at most 255 bytes.
+	Value []byte
+}
+
+// ReadDeviceIdentificationRequest is a 0x2B/0x0E request: read the device
+// identification objects selected by ReadCode.
+type ReadDeviceIdentificationRequest struct {
+	// ReadCode selects the object group: DeviceIDBasic, DeviceIDRegular,
+	// DeviceIDExtended or DeviceIDIndividual.
+	ReadCode byte
+	// ObjectID selects the first object for DeviceIDIndividual; it is 0 for
+	// the streamed read codes.
+	ObjectID byte
+}
+
+// Function reports the encapsulated-interface function code 0x2B.
+func (m ReadDeviceIdentificationRequest) Function() byte { return FuncEncapsulatedInterface }
+
+// PDU encodes the request as five bytes: function code, MEI type 0x0E, read
+// code and object id.
+func (m ReadDeviceIdentificationRequest) PDU() ([]byte, error) {
+	return encodeDeviceIDRequest(m.ReadCode, m.ObjectID)
+}
+
+// responseSpec reports the device-identification response a request expects.
+func (m ReadDeviceIdentificationRequest) responseSpec() (requestSpec, error) {
+	if err := checkDeviceIDReadCode(m.ReadCode); err != nil {
+		return requestSpec{}, err
+	}
+	return requestSpec{
+		function: FuncEncapsulatedInterface,
+		kind:     expectDeviceID,
+		value:    uint16(m.ReadCode),
+	}, nil
+}
+
+// ReadDeviceIdentificationResponse is a 0x2B/0x0E response.
+//
+// A server that cannot fit every requested object into one PDU sets MoreFollows
+// and NextObjectID; the client sends another request to continue from that
+// object.
+type ReadDeviceIdentificationResponse struct {
+	// ReadCode echoes the request read code.
+	ReadCode byte
+	// ConformityLevel is the support level the server reports: 0x01 to 0x03,
+	// or 0x81 to 0x83 when individual access is supported.
+	ConformityLevel byte
+	// MoreFollows reports that more objects follow in another response.
+	MoreFollows bool
+	// NextObjectID is the first object of the next response when MoreFollows is
+	// set.
+	NextObjectID byte
+	// Objects holds the identification objects in response order.
+	Objects []DeviceObject
+}
+
+// Function reports the encapsulated-interface function code 0x2B.
+func (m ReadDeviceIdentificationResponse) Function() byte { return FuncEncapsulatedInterface }
+
+// PDU encodes the response as the function code, MEI type 0x0E, the four fixed
+// fields and the object list.
+func (m ReadDeviceIdentificationResponse) PDU() ([]byte, error) {
+	return encodeDeviceIDResponse(m)
 }
