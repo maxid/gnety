@@ -6,6 +6,7 @@
 
 ## [Unreleased]
 
+- `codec/mqtt`：新增 `ReadPublishInto`，把 PUBLISH 解码进调用方提供的缓冲区而非分配。返回的 `PublishView` 暴露 fixed-header flags、remaining length、`[]byte` 形式的 topic、packet id、MQTT 5 property block 的偏移与长度、解码后的 `Properties`（没有 property block 时为 nil）与 payload；所有切片都别名调用方缓冲区，只在下次使用同一缓冲区的读取之前有效。校验与 `Decoder.Decode` 对 PUBLISH 完全一致（读取任何字节前检查大小上限、QoS > 2、QoS 0 带 DUP、UTF-8 与 U+0000 规则、packet id 0、3.1.1 无 property block、5.0 用同一张属性表），错误也一致；`publish_test.go` 用同一组帧走两条路径，要求接受/拒绝判定与字段值完全相同。MQTT 3.1.1 的 PUBLISH（以及 property block 为空的 MQTT 5 PUBLISH）零分配；携带属性的 property block 会被复制出缓冲区交给共享属性表解码，因此会分配，属性规则只有一份实现。`ErrNotPublish` 表示下一个包不是 PUBLISH 且未消费任何字节，调用方可以回退到 `Decode`。
 - 服务端/客户端新增 `SocketOptions`：`SO_REUSEADDR`、`SO_REUSEPORT`、TCP keepalive/nodelay/linger、读写缓冲区与 `Control` hook。DTLS 暂不暴露 socket 选项。
 - 新增自定义 socket 注入：服务端 `Config.Listener`/`Config.PacketConn`，客户端 `NewClient(net.Conn, ClientConfig)`。
 - 新增 TCP/UDP 端口工具：bind-probe 占用探测、下一个空闲端口、相邻端口的共享分配集合。

@@ -36,3 +36,26 @@ err = mqtt.WritePacket(writer, 0x30, body)
 ```
 
 保留给自行解析 packet body 的调用方。
+
+## PUBLISH 复用路径
+
+broker 会把同一种包读上百万次，因此 PUBLISH 也可以解码进调用方提供的缓冲区，而不是新分配内存：
+
+```go
+var buf []byte // 每连接一份：只增长一次，之后复用
+view, err := mqtt.ReadPublishInto(reader, mqtt.Version311, maxPacketSize, buf)
+switch {
+case errors.Is(err, mqtt.ErrNotPublish):
+	msg, err := d.Decode(reader) // 未消费任何字节：走类型化路径
+case err != nil:
+	// 错误与 Decode 相同
+}
+use(view.Topic, view.Payload, view.QoS, view.PacketID, view.Properties)
+buf = view.Buffer
+```
+
+`ReadPublishInto` 对 PUBLISH 施加与 `Decoder.Decode` 完全相同的校验——读任何字节前按上限检查 remaining length、QoS > 2、QoS 0 带 DUP、topic 的 UTF-8 与 U+0000 规则、packet id 0、3.1.1 无 property block、5.0 的 property block 用同一张表校验——并返回相同的错误。server 侧施加的 topic name 规则（非空、不含通配符、MQTT 5 中 topic alias 可替代空名）仍属于协议层，和 `Decode` 一样；因此 topic 以字节形式返回，调用方可以在分配字符串之前先做检查。
+
+生命周期：`Topic` 与 `Payload` 是 `Buffer` 的子切片（`Buffer` 就是传入的 `dst`，`dst` 不够大时是扩容后的新缓冲区），只在下次使用同一缓冲区的读取之前有效。保留 `view.Buffer` 并作为下次的 `dst` 传回；它只增长。需要跨读取保留 payload 的调用方自行复制。
+
+分配：MQTT 3.1.1 的 PUBLISH（以及 property block 为空的 MQTT 5 PUBLISH）解码零分配。携带属性的 MQTT 5 property block 会分配：它被复制出缓冲区后交给 `Decode` 用的同一张属性表解码，属性规则因此只有一份实现。

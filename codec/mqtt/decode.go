@@ -200,7 +200,9 @@ func readString(rd *wire.Reader) (string, error) {
 // It consumes the variable byte integer one byte at a time through the
 // budget-checked reader, so a body that ends inside the prefix reports
 // ErrIncomplete instead of reading into the next packet, and then applies the
-// shared shortest-form rule through takeVarint.
+// shared shortest-form rule through takeVarint. readPropertyLengthInto is the
+// same function for a body that is already in a buffer; both end in takeVarint,
+// so the encoding rules themselves have one implementation.
 func readPropertyLength(rd *wire.Reader) (int, error) {
 	var buf [wire.MaxVarintBytes]byte
 	for n := 1; n <= len(buf); n++ {

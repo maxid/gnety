@@ -5,6 +5,23 @@
 
 ## [Unreleased]
 
+- `codec/mqtt`: added `ReadPublishInto`, a PUBLISH reader that decodes into
+  caller-supplied storage instead of allocating. The returned `PublishView`
+  exposes the fixed-header flags, the remaining length, the topic as a `[]byte`
+  slice, the packet identifier, the offset and length of the MQTT 5 property
+  block, the decoded `Properties` (nil when the packet carried none) and the
+  payload; all slices alias the caller's buffer and are valid only until the next
+  read that uses it. The validation is the one `Decoder.Decode` applies to a
+  PUBLISH — size limit before any body byte is read, QoS > 2, DUP with QoS 0,
+  the UTF-8 and U+0000 rules, packet id 0, no property block at 3.1.1, and the
+  same property table for a 5.0 block — with the same errors, and the corpus in
+  `publish_test.go` decodes every frame through both paths and requires the same
+  accept/reject decision and the same field values. An MQTT 3.1.1 PUBLISH (and an
+  MQTT 5 one with an empty property block) decodes with zero allocations; a
+  property block that carries properties is copied out of the buffer and decoded
+  by the shared table, which allocates, so the correctness of the property rules
+  stays in one place. `ErrNotPublish` reports that the next packet is not a
+  PUBLISH without consuming it, so a caller can fall back to `Decode`.
 - Added `SocketOptions` for server and client: `SO_REUSEADDR`, `SO_REUSEPORT`,
   TCP keepalive/nodelay/linger, read/write buffers and a `Control` hook.
   DTLS does not expose socket options yet.

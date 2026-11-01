@@ -55,3 +55,40 @@ err = mqtt.WritePacket(writer, 0x30, body)
 ```
 
 These stay for callers that parse their own packet bodies.
+
+## Reuse path for PUBLISH
+
+A broker reads the same packet shape millions of times, so a PUBLISH can also be
+decoded into a caller-supplied buffer instead of into new memory:
+
+```go
+var buf []byte // per connection: grown once, then reused
+view, err := mqtt.ReadPublishInto(reader, mqtt.Version311, maxPacketSize, buf)
+switch {
+case errors.Is(err, mqtt.ErrNotPublish):
+	msg, err := d.Decode(reader) // nothing was consumed: read it the typed way
+case err != nil:
+	// the errors are Decode's own
+}
+use(view.Topic, view.Payload, view.QoS, view.PacketID, view.Properties)
+buf = view.Buffer
+```
+
+`ReadPublishInto` applies exactly the validation `Decoder.Decode` applies to a
+PUBLISH — remaining length against the limit before any byte is read, QoS > 2,
+DUP with QoS 0, the UTF-8 and U+0000 rules of the topic, packet id 0, no property
+block at 3.1.1, and the property table for a 5.0 block — and returns the same
+errors. The topic-name rules a server enforces (a non-empty name without
+wildcards, an MQTT 5 topic alias standing in for an empty one) stay with the
+protocol layer, exactly as they do for `Decode`; that is why the topic comes back
+as bytes, so a caller can check it before allocating a string.
+
+Lifetime: `Topic` and `Payload` are slices of `Buffer` — the `dst` that came in,
+or a larger buffer when `dst` was too small — so they are valid only until the
+next read that uses the same buffer. Keep `view.Buffer` and pass it back in; it
+only grows. A caller that keeps the payload beyond the next read copies it.
+
+Allocation: an MQTT 3.1.1 PUBLISH, and an MQTT 5 PUBLISH with an empty property
+block, decode without allocating. An MQTT 5 block that carries properties does
+allocate: it is copied out of the buffer and decoded by the same property table
+`Decode` uses, so the property rules have one implementation, not two.
