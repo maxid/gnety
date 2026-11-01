@@ -178,6 +178,9 @@ if gnety.TCPPortInUse(1883) {
 if gnety.UDPPortInUse(1883) {
     port, err := gnety.AvailableUDPPort(1883)
 }
+
+// 同一服务同时监听 TCP/UDP 的同一端口：
+both, err := gnety.AvailablePortBoth(1883)
 ```
 
 需要指定监听地址用 `On` 版本；同一服务的多个端口要共享 `allocated` 集合，
@@ -188,6 +191,9 @@ allocated := map[int]struct{}{}
 mqtt, _ := gnety.AvailablePortOn("0.0.0.0", 1883, allocated)
 mqttTLS, _ := gnety.AvailablePortOn("0.0.0.0", 8883, allocated)
 ```
+
+通用形式是 `AvailablePortFor(PortTCPAndUDP, host, start, allocated)`；
+`PortInUse(PortTCPAndUDP, ...)` 在任一协议被占用时返回 true。
 
 探测与真正 bind 之间天然有竞争窗口，调用方仍要处理 bind 失败。
 端口 `0` 表示交给系统分配，工具原样返回 `0`；负数或越界返回

@@ -184,6 +184,9 @@ if gnety.TCPPortInUse(1883) {
 if gnety.UDPPortInUse(1883) {
     port, err := gnety.AvailableUDPPort(1883)
 }
+
+// A service that binds the same numeric port for TCP and UDP:
+both, err := gnety.AvailablePortBoth(1883)
 ```
 
 Use the `On` variants to probe a specific host, and a shared `allocated` map
@@ -195,6 +198,9 @@ allocated := map[int]struct{}{}
 mqtt, _ := gnety.AvailablePortOn("0.0.0.0", 1883, allocated)
 mqttTLS, _ := gnety.AvailablePortOn("0.0.0.0", 8883, allocated)
 ```
+
+`AvailablePortFor(PortTCPAndUDP, host, start, allocated)` is the general form;
+`PortInUse(PortTCPAndUDP, ...)` is true when either protocol is occupied.
 
 A probe is inherently racy between the bind check and the real listen; the
 caller must still handle the bind error. Port `0` means "let the OS choose" and

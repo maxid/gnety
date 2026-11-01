@@ -103,3 +103,34 @@ func TestAvailablePortEphemeralAndErrors(t *testing.T) {
 		t.Fatalf("full range = %v", err)
 	}
 }
+
+func TestAvailablePortBothSkipsSingleProtocolOccupancy(t *testing.T) {
+	tcp, tcpLn := tcpPort(t)
+	defer tcpLn.Close()
+	got, err := AvailablePortBothOn("127.0.0.1", tcp, map[int]struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == tcp {
+		t.Fatalf("both selected TCP-occupied port %d", tcp)
+	}
+
+	udp, udpPc := udpPort(t)
+	defer udpPc.Close()
+	got, err = AvailablePortBothOn("127.0.0.1", udp, map[int]struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == udp {
+		t.Fatalf("both selected UDP-occupied port %d", udp)
+	}
+}
+
+func TestPortProtocolValidation(t *testing.T) {
+	if _, err := AvailablePortFor("sctp", "127.0.0.1", 1, nil); !errors.Is(err, ErrInvalidProtocol) {
+		t.Fatalf("invalid protocol = %v", err)
+	}
+	if _, err := AvailablePortFor("", "127.0.0.1", 0, nil); err != nil {
+		t.Fatalf("empty protocol should default to TCP: %v", err)
+	}
+}

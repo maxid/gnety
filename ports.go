@@ -11,9 +11,22 @@ import (
 // AnyAddress is the wildcard bind address used by the port helpers.
 const AnyAddress = "0.0.0.0"
 
+// PortProtocol selects which transport a port must be free for.
+type PortProtocol string
+
+const (
+	// PortTCP requires the TCP port to be free.
+	PortTCP PortProtocol = "tcp"
+	// PortUDP requires the UDP port to be free.
+	PortUDP PortProtocol = "udp"
+	// PortTCPAndUDP requires the same numeric port to be free for both.
+	PortTCPAndUDP PortProtocol = "tcp+udp"
+)
+
 // Port helper errors.
 var (
 	ErrInvalidPort     = errors.New("gnety: invalid port")
+	ErrInvalidProtocol = errors.New("gnety: invalid port protocol")
 	ErrNoAvailablePort = errors.New("gnety: no available port")
 )
 
@@ -26,7 +39,7 @@ func TCPPortInUse(port int) bool { return TCPPortInUseOn(AnyAddress, port) }
 
 // TCPPortInUseOn reports whether a TCP port is already bound on host.
 func TCPPortInUseOn(host string, port int) bool {
-	return portInUse("tcp", host, port)
+	return PortInUse(PortTCP, host, port)
 }
 
 // UDPPortInUse reports whether a UDP port is already bound on AnyAddress.
@@ -34,10 +47,25 @@ func UDPPortInUse(port int) bool { return UDPPortInUseOn(AnyAddress, port) }
 
 // UDPPortInUseOn reports whether a UDP port is already bound on host.
 func UDPPortInUseOn(host string, port int) bool {
-	return portInUse("udp", host, port)
+	return PortInUse(PortUDP, host, port)
 }
 
-func portInUse(network, host string, port int) bool {
+// PortInUse reports whether a port is unavailable for protocol. TCP and UDP
+// are probed by binding, not by connecting.
+func PortInUse(protocol PortProtocol, host string, port int) bool {
+	switch protocol {
+	case PortTCP:
+		return probePort("tcp", host, port)
+	case PortUDP:
+		return probePort("udp", host, port)
+	case PortTCPAndUDP:
+		return probePort("tcp", host, port) || probePort("udp", host, port)
+	default:
+		return true
+	}
+}
+
+func probePort(network, host string, port int) bool {
 	if port < 0 || port > maxPort {
 		return true
 	}
@@ -73,7 +101,7 @@ func AvailablePort(start int) (int, error) {
 // The probe-to-bind window is inherently racy; callers must still handle a
 // bind failure.
 func AvailablePortOn(host string, start int, allocated map[int]struct{}) (int, error) {
-	return availablePort("tcp", host, start, allocated)
+	return AvailablePortFor(PortTCP, host, start, allocated)
 }
 
 // AvailableUDPPort returns the first free UDP port at or after start on
@@ -84,10 +112,31 @@ func AvailableUDPPort(start int) (int, error) {
 
 // AvailableUDPPortOn returns the first free UDP port at or after start on host.
 func AvailableUDPPortOn(host string, start int, allocated map[int]struct{}) (int, error) {
-	return availablePort("udp", host, start, allocated)
+	return AvailablePortFor(PortUDP, host, start, allocated)
 }
 
-func availablePort(network, host string, start int, allocated map[int]struct{}) (int, error) {
+// AvailablePortBoth returns the first port free for both TCP and UDP on
+// AnyAddress. Use it when one service binds the same numeric port for both.
+func AvailablePortBoth(start int) (int, error) {
+	return AvailablePortFor(PortTCPAndUDP, AnyAddress, start, nil)
+}
+
+// AvailablePortBothOn is AvailablePortBoth with an explicit host and
+// allocation set.
+func AvailablePortBothOn(host string, start int, allocated map[int]struct{}) (int, error) {
+	return AvailablePortFor(PortTCPAndUDP, host, start, allocated)
+}
+
+// AvailablePortFor returns the first port free for protocol at or after start.
+// An empty protocol defaults to TCP; use PortTCPAndUDP to require both. The
+// allocated set is checked and updated like AvailablePortOn.
+func AvailablePortFor(protocol PortProtocol, host string, start int, allocated map[int]struct{}) (int, error) {
+	if protocol == "" {
+		protocol = PortTCP
+	}
+	if protocol != PortTCP && protocol != PortUDP && protocol != PortTCPAndUDP {
+		return 0, fmt.Errorf("%w: %q", ErrInvalidProtocol, protocol)
+	}
 	if start < 0 || start > maxPort {
 		return 0, fmt.Errorf("%w: %d", ErrInvalidPort, start)
 	}
@@ -104,14 +153,14 @@ func availablePort(network, host string, start int, allocated map[int]struct{}) 
 				continue
 			}
 		}
-		if !portInUse(network, host, candidate) {
+		if !PortInUse(protocol, host, candidate) {
 			if allocated != nil {
 				allocated[candidate] = struct{}{}
 			}
 			return candidate, nil
 		}
 	}
-	return 0, fmt.Errorf("%w: from %d on %s/%s", ErrNoAvailablePort, start, host, network)
+	return 0, fmt.Errorf("%w: from %d on %s/%s", ErrNoAvailablePort, start, host, protocol)
 }
 
 func bindHost(host string) string {
