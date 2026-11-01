@@ -8,13 +8,14 @@
 - [x] Pipeline middleware (Chain/Recover) and Broadcast
 - [x] Line/Fixed-length frame codecs
 - [x] Protocol codec kit: shared `codec/wire` primitives (bounded reader/writer, varint, UTF-8, chunk reassembly, error kinds)
-- [x] Protocol codec kit: MQTT, CoAP, HTTP/WebSocket, Modbus MBAP+PDU and LwM2M TLV wire formats
+- [x] Protocol codec kit: MQTT, CoAP, HTTP/WebSocket, Modbus MBAP+RTU+PDU (with vendor function-code registry) and LwM2M TLV wire formats
 - [x] Metrics hooks (low-cardinality transport/reason events)
 - [x] TLS / WebSocket / WSS listeners
 - [x] channel-style socket options: ReuseAddr/ReusePort, TCP keepalive/nodelay/linger, buffers, Control hook
 - [x] Custom socket injection: Config.Listener/PacketConn, Client NewClient(net.Conn)
 - [x] Port helpers: TCP/UDP bind-probe, next free port, shared allocation set
 - [x] DTLS transport (server/client)
+- [x] In-memory TLS/DTLS configs and Client.SetDeadline for protocol libraries
 - [ ] Optional gnet backend + benchmarks
 - [x] Configurable length-field framing (magic/offset/size/endian) and BCD helpers
 - [ ] GBK/GB18030 helpers

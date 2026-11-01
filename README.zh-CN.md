@@ -9,7 +9,7 @@ Go 的可组合**网络应用框架**：服务端/客户端引导、TCP/UDP/TLS/
 协议状态机位于构建在其之上的协议库中。
 
 > 状态：**开发快照（未打标签）** — TCP/UDP/TLS/WS/WSS/DTLS 服务端与客户端、
-> 流水线中间件、分帧 + MQTT/CoAP/Modbus 编解码器、会话、
+> 流水线中间件、分帧 + MQTT/CoAP/Modbus（MBAP+RTU）编解码器、会话、
 > 请求/响应关联、心跳、指标钩子与有界写队列；
 > HTTP/WebSocket 编解码包目前是占位实现。
 > 在稳定版本发布前不会打标签；请使用 commit 伪版本（pseudo-version）。
@@ -42,8 +42,8 @@ gnety 是一个**框架**，以易用性和协议基座为定位：
 - 限制/超时：`MaxSessions`、`MaxPendingRequests`、`WriteTimeout`、`ShutdownTimeout`；显式的 DTLS `InsecureSkipVerify`
 - 服务端引导（已完成）；客户端连接器（TCP/UDP/TCP-TLS/WS/WSS/DTLS，已完成）；重连/背压（路线图）
 - 可组合的流水线/中间件（`Chain`、`Recover` 等）
-- TLS / WebSocket / WSS / DTLS（服务端 + 客户端）
-- 协议编解码套件（`codec/`）：共享字节原语（`codec/wire`）、HTTP/1.1、WebSocket、MQTT、CoAP、Modbus MBAP+PDU、LwM2M TLV（仅线格式）
+- TLS / WebSocket / WSS / DTLS（服务端 + 客户端），支持文件配置或内存态 `*tls.Config`/`*dtls.Config`
+- 协议编解码套件（`codec/`）：共享字节原语（`codec/wire`）、HTTP/1.1、WebSocket、MQTT、CoAP、Modbus MBAP+RTU+PDU（含厂商功能码注册表）、LwM2M TLV（仅线格式）
 - 指标钩子、事件循环后端选项
 - 广播与测试工具
 

@@ -1,7 +1,8 @@
 # codec/modbus
 
-Modbus TCP **wire format** only: the MBAP header, the typed PDUs for the
-function codes the platform uses, and the exception response.
+Modbus **wire format** only: the MBAP header of Modbus TCP, the RTU frame of
+Modbus serial, the typed PDUs for the function codes the platform uses, the
+exception response and a registry for vendor function codes.
 
 Explicitly out of scope: transaction matching, retries, polling schedules,
 register-address maps, device models and mapping an exception code to a device
@@ -38,6 +39,32 @@ stream:
 frame, err := modbus.ReadTypedResponse(reader, 0, req)
 ```
 
+`Parse` is the whole-packet entry point for a datagram transport: it requires one
+complete MBAP frame and rejects trailing bytes.
+
+## RTU framing
+
+An RTU application data unit is the unit id, the PDU and a CRC16. There is no
+length field, so the reader derives the frame length from the function code (and
+the byte count inside variable-size PDUs):
+
+```go
+frame := modbus.RTUFrame{UnitID: 1, PDU: pdu}
+raw, err := frame.Marshal()                    // unit id, PDU, CRC16 (low byte first)
+
+frame, err = modbus.RTUOptions{}.Parse(raw, 0) // whole datagram
+req, err := modbus.RTUOptions{}.ReadTypedRequest(reader, 0, nil)
+resp, err := modbus.RTUOptions{}.ReadTypedResponse(reader, 0, nil, request)
+```
+
+`CRC16` implements the specification polynomial (0xA001) and returns the value in
+host order; the wire order is low byte then high byte. A truncated frame is
+`wire.ErrIncomplete`; a bad CRC, a frame longer than 256 bytes or a function code
+without a framing rule is rejected before a PDU is allocated.
+
+`RTUOptions{NoCRC: true}` omits and skips the checksum. It exists for gateways
+that carry RTU frames without a CRC over TCP or UDP; serial RTU must keep it.
+
 ## Messages
 
 | Function | Request | Response |
@@ -50,11 +77,20 @@ frame, err := modbus.ReadTypedResponse(reader, 0, req)
 | 0x06 Write Single Register | `WriteSingleRegister` | `WriteSingleRegister` (echo) |
 | 0x0F Write Multiple Coils | `WriteMultipleCoilsRequest` | `WriteMultipleCoilsResponse` |
 | 0x10 Write Multiple Registers | `WriteMultipleRegistersRequest` | `WriteMultipleRegistersResponse` |
+| 0x16 Mask Write Register | `MaskWriteRegister` | `MaskWriteRegister` (echo) |
+| 0x17 Read/Write Multiple Registers | `ReadWriteMultipleRegistersRequest` | `ReadWriteMultipleRegistersResponse` |
+| 0x2B/0x0E Read Device Identification | `ReadDeviceIdentificationRequest` | `ReadDeviceIdentificationResponse` |
 
 A `ReadCoilsRequest`, `ReadDiscreteInputsRequest`,
 `ReadHoldingRegistersRequest` or `ReadInputRegistersRequest` carries the starting
 `Address` and the `Quantity`. A multiple-write request carries `Address` and the
 `Values`; its quantity and byte count are derived from the slice.
+
+A read/write-multiple request carries both ranges and the write values; its write
+quantity and byte count are derived from the slice, and the write side is capped
+at 121 registers because the read side shares the PDU. A read-device-
+identification response carries the objects the server returned plus
+`MoreFollows`/`NextObjectID`, so a caller can continue with another request.
 
 Exception responses decode to `*Exception` with the request function code and an
 `ExceptionCode`. `Exception` implements `error`: `errors.As` recovers the typed
@@ -78,6 +114,32 @@ response is a valid reply, so decoding it returns a message and a nil error.
 - `DecodePDU` decodes requests (and exception responses). A read response has no
   direction flag and its byte count would be misread as part of the address, so
   responses are decoded by `DecodeResponse`, which takes the request they answer.
+
+## Vendor function codes
+
+`Functions` registers a non-standard function code, or overrides one of the
+built-in codes, without changing this package:
+
+```go
+funcs := modbus.Functions{
+    0x64: {
+        DecodeRequest:  func(pdu []byte) (modbus.Message, error) { ... },
+        DecodeResponse: func(req modbus.Message, pdu []byte) (modbus.Message, error) { ... },
+        RequestLength:  func(frame []byte) (int, error) { ... },  // RTU streams only
+        ResponseLength: func(req modbus.Message, frame []byte) (int, error) { ... },
+    },
+}
+msg, err := funcs.DecodePDU(pdu)            // registry first, then built-in
+msg, err = funcs.DecodeResponse(req, pdu)
+```
+
+The registry is consulted before the built-in decoder, so a vendor that redefines
+a standard function code's payload can override it. An exception response is
+always decoded by the built-in decoder. `RequestLength` and `ResponseLength`
+return the PDU length from the bytes read so far (0 asks for one more byte); they
+are only needed when the code runs over RTU serial or RTU-over-TCP, which have no
+length field. A `nil` hook leaves that direction unsupported on those transports;
+MBAP and whole-datagram paths do not need it.
 
 ## Validation
 

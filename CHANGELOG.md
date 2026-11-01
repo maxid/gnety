@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+- `codec/modbus`: added the Modbus RTU wire format — `RTUFrame`, `CRC16`, whole-datagram `Parse`, direction-aware stream readers (`Read`/`ReadResponse`) whose frame length comes from the function code, typed `ReadTypedRequest`/`ReadTypedResponse`, and `RTUOptions{NoCRC}` for gateways that strip the checksum. Added `Frame.Parse` for whole MBAP datagrams.
+- `codec/modbus`: added typed PDUs for 0x16 Mask Write Register, 0x17 Read/Write Multiple Registers and 0x2B/0x0E Read Device Identification, with the matching response checks.
+- `codec/modbus`: added `Functions`, a function-code registry that decodes vendor codes (or replaces a standard code's payload) before the built-in decoder, including PDU-length hooks for RTU streams.
+- Transport: `ClientConfig.TLSConfig`/`DTLSConfig` and `Config.TLSConfig`/`DTLSConfig` accept in-memory security configurations instead of certificate files.
+- `Client.SetDeadline` bounds or aborts an in-flight `Send`/`Receive`, so a protocol library can implement a per-attempt timeout and cancellation.
+
 - `codec/mqtt`: added `ReadPublishInto`, a PUBLISH reader that decodes into
   caller-supplied storage instead of allocating. The returned `PublishView`
   exposes the fixed-header flags, the remaining length, the topic as a `[]byte`

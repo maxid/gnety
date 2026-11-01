@@ -11,7 +11,7 @@ sockets. Wire-format codecs live in gnety; protocol state machines live in the
 protocol libraries built on top.
 
 > Status: **development snapshot (untagged)** — TCP/UDP/TLS/WS/WSS/DTLS servers and
-> clients, pipeline middleware, frame + MQTT/CoAP/Modbus codecs, sessions,
+> clients, pipeline middleware, frame + MQTT/CoAP/Modbus (MBAP+RTU) codecs, sessions,
 > request/response correlation, heartbeats, metrics hooks and bounded write queues;
 > the HTTP/WebSocket codec packages are placeholders.
 > No tags are published until a stable release; use commit pseudo-versions.
@@ -45,8 +45,8 @@ Rules:
 - limits/timeouts: `MaxSessions`, `MaxPendingRequests`, `WriteTimeout`, `ShutdownTimeout`; explicit DTLS `InsecureSkipVerify`
 - server bootstrap (done); client connector (TCP/UDP/TCP-TLS/WS/WSS/DTLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
-- TLS / WebSocket / WSS / DTLS (server + client)
-- protocol codec kit (`codec/`): shared byte primitives (`codec/wire`), HTTP/1.1, WebSocket, MQTT, CoAP, Modbus MBAP+PDU, LwM2M TLV (wire format only)
+- TLS / WebSocket / WSS / DTLS (server + client), from files or an in-memory `*tls.Config`/`*dtls.Config`
+- protocol codec kit (`codec/`): shared byte primitives (`codec/wire`), HTTP/1.1, WebSocket, MQTT, CoAP, Modbus MBAP+RTU+PDU (with a vendor function-code registry), LwM2M TLV (wire format only)
 - metrics hooks, event-loop backend option
 - broadcast and test utilities
 
