@@ -98,6 +98,8 @@ const (
 	CodeNotFound Code = 132
 	// CodeMethodNotAllowed is 4.05 Method Not Allowed.
 	CodeMethodNotAllowed Code = 133
+	// CodeConflict is 4.09 Conflict.
+	CodeConflict Code = 137
 	// CodePreconditionFailed is 4.12 Precondition Failed.
 	CodePreconditionFailed Code = 140
 	// CodeRequestEntityIncomplete is 4.08 Request Entity Incomplete, the answer

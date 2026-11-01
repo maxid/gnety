@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-- `codec/coap`：新增 `CodeRequestEntityIncomplete`（4.08），用于应答分块请求体中缺块或乱序的 Block1 上传（RFC 7959）。
+- `codec/coap`：新增 `CodeRequestEntityIncomplete`（4.08）与 `CodeConflict`（4.09）；前者用于应答分块请求体中缺块或乱序的 Block1 上传（RFC 7959）。
 
 - `codec/modbus`：新增 Modbus RTU 线格式——`RTUFrame`、`CRC16`、整包 `Parse`、按功能码推导帧长的方向感知流式读取（`Read`/`ReadResponse`）、类型化 `ReadTypedRequest`/`ReadTypedResponse`，以及为去 CRC 网关准备的 `RTUOptions{NoCRC}`；另补 MBAP 整包 `Frame.Parse`。
 - `codec/modbus`：新增 0x16 掩码写、0x17 读写多寄存器、0x2B/0x0E 读设备标识的类型化 PDU 与对应响应校验。
