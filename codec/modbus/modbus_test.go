@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/maxid/gnety/codec/wire"
@@ -134,4 +135,34 @@ func FuzzRead(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = Read(bufio.NewReader(bytes.NewReader(data)), 0)
 	})
+}
+
+func TestParseFrame(t *testing.T) {
+	f := Frame{TransactionID: 0x1234, UnitID: 7, PDU: []byte{0x03, 0x00, 0x00, 0x00, 0x01}}
+	raw, err := f.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	got, err := Parse(raw, 0)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.TransactionID != f.TransactionID || got.UnitID != f.UnitID || !bytes.Equal(got.PDU, f.PDU) {
+		t.Fatalf("Parse = %#v, want %#v", got, f)
+	}
+	raw[len(raw)-1] = 0xff
+	if got.PDU[4] == 0xff {
+		t.Fatal("Parse aliased the input buffer")
+	}
+
+	trailing := append(append([]byte(nil), raw...), 0x00)
+	if _, err := Parse(trailing, 0); !errors.Is(err, wire.ErrMalformed) {
+		t.Fatalf("trailing: err = %v, want malformed", err)
+	}
+	if _, err := Parse(raw[:len(raw)-1], 0); !errors.Is(err, wire.ErrMalformed) {
+		t.Fatalf("truncated: err = %v, want malformed", err)
+	}
+	if _, err := Parse(raw, 3); !errors.Is(err, wire.ErrTooLarge) {
+		t.Fatalf("budget: err = %v, want too large", err)
+	}
 }

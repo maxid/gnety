@@ -1,10 +1,12 @@
-// Package modbus implements the Modbus TCP wire format: the MBAP header and the
-// PDU bytes that follow it.
+// Package modbus implements the Modbus wire format: the MBAP header and PDU
+// bytes of Modbus TCP, and the unit id, PDU and CRC16 frame of Modbus RTU.
 //
-// Two layers are available. Frame, Marshal, Read and Codec work on raw PDU bytes.
-// Message, DecodePDU, DecodeResponse and EncodePDU add the typed PDUs for the
-// function codes the platform uses, and TypedFrame carries one of those messages
-// through the MBAP header.
+// Two layers are available. Frame, Marshal, Read, RTUFrame, RTUOptions and Codec
+// work on raw PDU bytes. Message, DecodePDU, DecodeResponse and EncodePDU add
+// the typed PDUs for the function codes the platform uses, TypedFrame carries
+// one of those messages through the MBAP header and TypedRTUFrame carries one
+// through an RTU frame. Functions lets a consumer register a non-standard
+// function code, or override a standard one, without changing this package.
 //
 // It converts bytes to frames and messages and back only. Transaction matching,
 // polling schedules, retries, mapping an exception code to a device error and
@@ -45,16 +47,24 @@ const (
 // Modbus function codes. Only the codes this format layer recognizes are
 // listed; their semantics live in the client library.
 const (
-	FuncReadCoils              byte = 0x01
-	FuncReadDiscreteInputs     byte = 0x02
-	FuncReadHoldingRegisters   byte = 0x03
-	FuncReadInputRegisters     byte = 0x04
-	FuncWriteSingleCoil        byte = 0x05
-	FuncWriteSingleRegister    byte = 0x06
-	FuncReadExceptionStatus    byte = 0x07
-	FuncWriteMultipleCoils     byte = 0x0f
-	FuncWriteMultipleRegisters byte = 0x10
-	FuncEncapsulatedInterface  byte = 0x2b
+	FuncReadCoils                  byte = 0x01
+	FuncReadDiscreteInputs         byte = 0x02
+	FuncReadHoldingRegisters       byte = 0x03
+	FuncReadInputRegisters         byte = 0x04
+	FuncWriteSingleCoil            byte = 0x05
+	FuncWriteSingleRegister        byte = 0x06
+	FuncReadExceptionStatus        byte = 0x07
+	FuncWriteMultipleCoils         byte = 0x0f
+	FuncWriteMultipleRegisters     byte = 0x10
+	FuncMaskWriteRegister          byte = 0x16
+	FuncReadWriteMultipleRegisters byte = 0x17
+	FuncEncapsulatedInterface      byte = 0x2b
+)
+
+// MEI types for the encapsulated interface function code (0x2B).
+const (
+	// MEIReadDeviceIdentification is the Read Device Identification MEI type.
+	MEIReadDeviceIdentification byte = 0x0e
 )
 
 // IsException reports whether the function code marks an exception response
@@ -135,6 +145,40 @@ func Read(r *bufio.Reader, maxPDU int) (Frame, error) {
 		return Frame{}, err
 	}
 	return Frame{TransactionID: txID, UnitID: unitID, PDU: pdu}, nil
+}
+
+// Parse decodes one whole MBAP frame. It requires the buffer to hold exactly
+// one frame, so a datagram transport rejects a packet that carries trailing
+// bytes or ends inside the frame.
+func Parse(data []byte, maxPDU int) (Frame, error) {
+	if maxPDU <= 0 {
+		maxPDU = MaxPDU
+	}
+	if len(data) < MBAPLen {
+		return Frame{}, wire.Errorf(wire.KindMalformed, "modbus: frame of %d bytes is shorter than the %d-byte MBAP header", len(data), MBAPLen)
+	}
+	protoID := binary.BigEndian.Uint16(data[2:4])
+	if protoID != ProtocolID {
+		return Frame{}, wire.Errorf(wire.KindMalformed, "modbus: protocol id %d, want %d", protoID, ProtocolID)
+	}
+	length := int(binary.BigEndian.Uint16(data[4:6]))
+	if length < minLength {
+		return Frame{}, wire.Errorf(wire.KindMalformed, "modbus: length %d is below the minimum %d", length, minLength)
+	}
+	if length-1 > maxPDU {
+		return Frame{}, wire.Errorf(wire.KindTooLarge, "modbus: PDU of %d bytes exceeds %d", length-1, maxPDU)
+	}
+	want := MBAPLen - 1 + length
+	if len(data) != want {
+		return Frame{}, wire.Errorf(wire.KindMalformed, "modbus: frame of %d bytes, the MBAP header declares %d", len(data), want)
+	}
+	pdu := make([]byte, length-1)
+	copy(pdu, data[MBAPLen:])
+	return Frame{
+		TransactionID: binary.BigEndian.Uint16(data[0:2]),
+		UnitID:        data[6],
+		PDU:           pdu,
+	}, nil
 }
 
 // Codec adapts the Modbus frame format to gnety's stream codec interface.
