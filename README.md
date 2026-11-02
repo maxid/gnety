@@ -238,6 +238,27 @@ Broadcast:
 n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
 
+## Extension points
+
+The observability contract lives in [`hook`](hook/): `Metrics`, `NoopMetrics` and the coarse
+session labels (`ReasonClosed`, `ReasonReadError`, `ReasonBackpressure`, ...). The root
+package re-exports every one of them as an alias, so the two import paths are the same types
+and existing code needs no change:
+
+```go
+var m gnety.Metrics = hook.MetricsFuncs{} // literally the same type
+```
+
+`hook.MetricsFuncs` implements the six methods with optional function fields — set only the
+events you care about, and nil fields are skipped. `hook.NoopMetrics` is the default and
+drops everything.
+
+To make extensions switchable at run time — start, stop, inspect — wrap the server in a
+plugin registry: `gplugin.NewRegistry(server)` from
+[`gplugin`](https://github.com/maxid/gplugin) gives named plugins, a three-state lifecycle,
+an observer and per-plugin start/stop; this package only defines what a plugin can plug
+into.
+
 ## Examples
 
 Two runnable echo servers live under `examples/`, using the length-prefixed TCP

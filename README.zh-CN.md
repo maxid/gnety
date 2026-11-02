@@ -230,6 +230,23 @@ srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: codec, Ha
 n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
 
+## 扩展点
+
+可观测性契约在 [`hook`](hook/)：`Metrics`、`NoopMetrics` 与粗粒度会话标签（`ReasonClosed`、
+`ReasonReadError`、`ReasonBackpressure` 等）。根包把它们全部以类型别名重新导出，因此两条
+import 路径是同一种类型，已有代码不用改：
+
+```go
+var m gnety.Metrics = hook.MetricsFuncs{} // 同一个类型
+```
+
+`hook.MetricsFuncs` 用可选函数字段实现这六个方法——只设你关心的事件，nil 字段直接跳过；
+`hook.NoopMetrics` 是默认实现，全部丢弃。
+
+要让扩展在运行期可开关、可观测，把服务端套进插件注册表：
+[`gplugin`](https://github.com/maxid/gplugin) 的 `gplugin.NewRegistry(server)` 提供具名插件、
+三态生命周期、观察者与单品启停；本包只定义"插件能插到哪里"。
+
 ## 示例
 
 `examples/` 下有两个可运行的回显服务端，分别使用上文快速开始中的长度前缀 TCP

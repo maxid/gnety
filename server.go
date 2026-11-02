@@ -783,3 +783,30 @@ func (s *Server) cleanupUDP() {
 		}
 	}
 }
+
+// DefaultMaxQueuedWrites is how many goroutines may wait to write on one
+// session when Config.MaxQueuedWrites is zero.
+const DefaultMaxQueuedWrites = 8
+
+// metric returns the configured Metrics, or a no-op implementation.
+func (s *Server) metric() Metrics {
+	if s.cfg.Metrics == nil {
+		return NoopMetrics{}
+	}
+	return s.cfg.Metrics
+}
+
+// transport is the configured network name, the only transport label emitted.
+func (s *Server) transport() string { return s.cfg.Network }
+
+// maxQueuedWrites resolves the write gate size. A negative value disables it.
+func (s *Server) maxQueuedWrites() int {
+	switch n := s.cfg.MaxQueuedWrites; {
+	case n < 0:
+		return 0
+	case n == 0:
+		return DefaultMaxQueuedWrites
+	default:
+		return n
+	}
+}

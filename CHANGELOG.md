@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The metrics contract moved to `gnety/hook`.** `Metrics`, `NoopMetrics` and the session
+  labels (`Reason*`) are defined there and re-exported by the root package as aliases, so
+  existing imports, names and interface assertions are unchanged. `gnety/hook` imports
+  nothing from the root package.
+
+### Added
+
+- `hook.MetricsFuncs`: implement the six metrics methods with optional function fields; a
+  nil field is skipped.
+
 - `codec/coap`: added `CodeRequestEntityIncomplete` (4.08), the answer to a block-wise request body whose blocks are missing or out of order (RFC 7959), and `CodeConflict` (4.09).
 
 - `codec/modbus`: added the Modbus RTU wire format — `RTUFrame`, `CRC16`, whole-datagram `Parse`, direction-aware stream readers (`Read`/`ReadResponse`) whose frame length comes from the function code, typed `ReadTypedRequest`/`ReadTypedResponse`, and `RTUOptions{NoCRC}` for gateways that strip the checksum. Added `Frame.Parse` for whole MBAP datagrams.

@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **指标契约移到 `gnety/hook`。** `Metrics`、`NoopMetrics` 与会话标签（`Reason*`）定义在该包，
+  根包以类型别名重新导出，已有的 import、名称与接口断言全部照旧。`gnety/hook` 不 import 根包。
+
+### 新增
+
+- `hook.MetricsFuncs`：用可选函数字段实现六个指标方法，nil 字段直接跳过。
+
 - `codec/coap`：新增 `CodeRequestEntityIncomplete`（4.08）与 `CodeConflict`（4.09）；前者用于应答分块请求体中缺块或乱序的 Block1 上传（RFC 7959）。
 
 - `codec/modbus`：新增 Modbus RTU 线格式——`RTUFrame`、`CRC16`、整包 `Parse`、按功能码推导帧长的方向感知流式读取（`Read`/`ReadResponse`）、类型化 `ReadTypedRequest`/`ReadTypedResponse`，以及为去 CRC 网关准备的 `RTUOptions{NoCRC}`；另补 MBAP 整包 `Frame.Parse`。
