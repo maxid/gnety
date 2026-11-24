@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/pion/dtls/v2"
 
+	"github.com/maxid/glimit"
 	ws "github.com/maxid/gnety/codec/http/websocket"
 )
 
@@ -82,6 +84,14 @@ type Config struct {
 	MaxFrameSize int
 	// MaxSessions limits concurrent connections/peers (0 = unlimited).
 	MaxSessions int
+	// Limiter, when set, is consulted in addition to MaxSessions and the
+	// per-session limits: the connection count and accept rate at accept time,
+	// the byte and frame rates on a session. Both layers must admit; nil keeps
+	// the behaviour unchanged. See github.com/maxid/glimit.
+	Limiter glimit.Limiter
+	// Rejecter, when set, may write a protocol-level refusal before a
+	// connection or session is closed for a limit. Nil closes without a frame.
+	Rejecter Rejecter
 	// MaxPendingRequests limits per-session Request correlation entries
 	// (0 = unlimited).
 	MaxPendingRequests int
@@ -120,11 +130,14 @@ type Server struct {
 	pc       net.PacketConn
 	sessions map[string]*Session
 	conns    map[net.Conn]struct{}
-	httpSrv  *http.Server
-	done     chan struct{}
-	wg       sync.WaitGroup
-	started  bool
-	seq      atomic.Uint64
+	// limits is the credit a raw connection holds; sessions keep theirs on the
+	// session so it is returned exactly once, on close.
+	limits  map[net.Conn][]glimit.Key
+	httpSrv *http.Server
+	done    chan struct{}
+	wg      sync.WaitGroup
+	started bool
+	seq     atomic.Uint64
 }
 
 // New validates cfg and returns a Server.
@@ -184,7 +197,8 @@ func New(cfg Config) (*Server, error) {
 			return nil, errors.New("gnety: invalid WebSocket subprotocol")
 		}
 	}
-	return &Server{cfg: cfg, sessions: make(map[string]*Session), conns: make(map[net.Conn]struct{}), done: make(chan struct{})}, nil
+	return &Server{cfg: cfg, sessions: make(map[string]*Session), conns: make(map[net.Conn]struct{}),
+		limits: make(map[net.Conn][]glimit.Key), done: make(chan struct{})}, nil
 }
 
 // Start starts listening. It returns once the socket is ready.
@@ -485,9 +499,18 @@ func (s *Server) acceptDTLS() {
 			_ = conn.Close()
 			continue
 		}
+		// The limiter is consulted under mu: it takes no server lock, and
+		// admission must stay one step with registration.
+		d, credit := s.admit(conn.RemoteAddr())
+		if !d.Allow {
+			s.mu.Unlock()
+			s.reject(conn, d)
+			continue
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 		sess := s.newDatagramSession(conn)
+		sess.limitKeys = credit
 		s.addSession(sess)
 		s.wg.Add(1)
 		go s.serveDatagram(sess)
@@ -525,9 +548,19 @@ func (s *Server) serveDatagram(sess *Session) {
 			closeErr = err
 			return
 		}
+		if d := s.admitBytes(sess, glimit.DirIn, n); !d.Allow {
+			closeErr = ErrRateLimited
+			s.deny(sess, d)
+			return
+		}
 		msg, err := s.cfg.DatagramCodec.Decode(buf[:n])
 		if err != nil {
 			continue
+		}
+		if d := s.admitFrame(sess); !d.Allow {
+			closeErr = ErrRateLimited
+			s.deny(sess, d)
+			return
 		}
 		s.metric().MessageIn(s.transport())
 		sess.touch()
@@ -570,21 +603,31 @@ func (s *Server) wsHandler() http.Handler {
 			_ = conn.Close()
 			return
 		}
+		d, credit := s.admit(conn.RemoteAddr())
+		if !d.Allow {
+			s.mu.Unlock()
+			s.reject(conn, d)
+			return
+		}
 		s.conns[conn] = struct{}{}
+		if s.cfg.RawHandler != nil {
+			// No session object exists on the raw path, so the connection
+			// itself carries the credit.
+			s.limits[conn] = credit
+		}
 		s.mu.Unlock()
 		if s.cfg.RawHandler != nil {
 			s.wg.Add(1)
 			defer s.wg.Done()
 			defer func() {
 				_ = conn.Close()
-				s.mu.Lock()
-				delete(s.conns, conn)
-				s.mu.Unlock()
+				s.forgetConn(conn)
 			}()
 			s.cfg.RawHandler(conn)
 			return
 		}
 		sess := s.newSession(conn)
+		sess.limitKeys = credit
 		s.addSession(sess)
 		s.wg.Add(1)
 		s.serveTCP(sess)
@@ -648,7 +691,16 @@ func (s *Server) acceptTCP() {
 			_ = conn.Close()
 			continue
 		}
+		d, credit := s.admit(conn.RemoteAddr())
+		if !d.Allow {
+			s.mu.Unlock()
+			s.reject(conn, d)
+			continue
+		}
 		s.conns[conn] = struct{}{}
+		if s.cfg.RawHandler != nil {
+			s.limits[conn] = credit
+		}
 		s.mu.Unlock()
 		if s.cfg.RawHandler != nil {
 			s.wg.Add(1)
@@ -656,15 +708,14 @@ func (s *Server) acceptTCP() {
 				defer s.wg.Done()
 				defer func() {
 					_ = conn.Close()
-					s.mu.Lock()
-					delete(s.conns, conn)
-					s.mu.Unlock()
+					s.forgetConn(conn)
 				}()
 				s.cfg.RawHandler(conn)
 			}()
 			continue
 		}
 		sess := s.newSession(conn)
+		sess.limitKeys = credit
 		s.addSession(sess)
 		s.wg.Add(1)
 		go s.serveTCP(sess)
@@ -682,7 +733,8 @@ func (s *Server) serveTCP(sess *Session) {
 		s.removeSession(sess.ID)
 		sess.closeOnceWith(closeErr)
 	}()
-	r := bufio.NewReader(sess.conn)
+	meter := &countingReader{r: sess.conn}
+	r := bufio.NewReader(meter)
 	for {
 		if s.cfg.IdleTimeout > 0 {
 			_ = sess.conn.SetReadDeadline(time.Now().Add(s.cfg.IdleTimeout))
@@ -690,6 +742,16 @@ func (s *Server) serveTCP(sess *Session) {
 		msg, err := s.cfg.Codec.Decode(r)
 		if err != nil {
 			closeErr = err
+			return
+		}
+		if d := s.admitBytes(sess, glimit.DirIn, meter.take()); !d.Allow {
+			closeErr = ErrRateLimited
+			s.deny(sess, d)
+			return
+		}
+		if d := s.admitFrame(sess); !d.Allow {
+			closeErr = ErrRateLimited
+			s.deny(sess, d)
 			return
 		}
 		s.metric().MessageIn(s.transport())
@@ -722,8 +784,16 @@ func (s *Server) readUDP() {
 		if sess == nil {
 			continue
 		}
+		if d := s.admitBytes(sess, glimit.DirIn, n); !d.Allow {
+			s.deny(sess, d)
+			continue
+		}
 		msg, err := s.cfg.DatagramCodec.Decode(data)
 		if err != nil {
+			continue
+		}
+		if d := s.admitFrame(sess); !d.Allow {
+			s.deny(sess, d)
 			continue
 		}
 		s.metric().MessageIn(s.transport())
@@ -746,7 +816,13 @@ func (s *Server) udpSession(addr net.Addr) *Session {
 		s.metric().SessionRejected(s.transport(), ReasonMaxSessions)
 		return nil
 	}
-	sess := &Session{ID: id, RemoteAddr: addr, srv: s}
+	d, credit := s.admit(addr)
+	if !d.Allow {
+		s.mu.Unlock()
+		s.metric().SessionRejected(s.transport(), limitReason(d.Reason))
+		return nil
+	}
+	sess := &Session{ID: id, RemoteAddr: addr, srv: s, limitKeys: credit}
 	sess.init()
 	sess.touch()
 	s.sessions[id] = sess
@@ -808,5 +884,159 @@ func (s *Server) maxQueuedWrites() int {
 		return DefaultMaxQueuedWrites
 	default:
 		return n
+	}
+}
+
+// countingReader forwards reads and remembers how many bytes passed through, so
+// a codec that reads ahead is still metered.
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// take returns the bytes read since the previous call.
+func (c *countingReader) take() int {
+	n := c.n
+	c.n = 0
+	return n
+}
+
+// peerID is the limiter identity of a remote address: the host part, so every
+// connection from one peer shares a key. A port never becomes an identity.
+func peerID(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
+}
+
+// connectionKeys are the limiter keys a new session charges: the connection
+// gauge and the accept rate, each globally and per peer.
+func (s *Server) connectionKeys(addr net.Addr) []glimit.Key {
+	peer := peerID(addr)
+	return []glimit.Key{
+		{Kind: glimit.KindConnections, Scope: glimit.ScopeGlobal},
+		{Kind: glimit.KindConnections, Scope: glimit.ScopePeer, ID: peer},
+		{Kind: glimit.KindRequests, Scope: glimit.ScopeGlobal, Direction: glimit.DirIn},
+		{Kind: glimit.KindRequests, Scope: glimit.ScopePeer, ID: peer, Direction: glimit.DirIn},
+	}
+}
+
+// admit charges the connection keys for addr and returns the credit the caller
+// must hand back on close. A denied admission leaves no credit behind.
+func (s *Server) admit(addr net.Addr) (glimit.Decision, []glimit.Key) {
+	if s.cfg.Limiter == nil {
+		return glimit.Decision{Allow: true}, nil
+	}
+	var charged []glimit.Key
+	for _, key := range s.connectionKeys(addr) {
+		d := s.cfg.Limiter.Allow(context.Background(), key, 1)
+		if !d.Allow {
+			s.release(charged)
+			return d, nil
+		}
+		charged = append(charged, key)
+	}
+	return glimit.Decision{Allow: true}, charged
+}
+
+// release returns the credit taken by admit. Releasing a rate key is a no-op in
+// glimit, so the same list serves both shapes.
+func (s *Server) release(keys []glimit.Key) {
+	if s.cfg.Limiter == nil || len(keys) == 0 {
+		return
+	}
+	for _, key := range keys {
+		s.cfg.Limiter.Release(context.Background(), key, 1)
+	}
+}
+
+// admitBytes charges an inbound or outbound byte rate for a session.
+func (s *Server) admitBytes(sess *Session, dir glimit.Direction, n int) glimit.Decision {
+	if s.cfg.Limiter == nil || n <= 0 {
+		return glimit.Decision{Allow: true}
+	}
+	global := glimit.Key{Kind: glimit.KindBytes, Scope: glimit.ScopeGlobal, Direction: dir}
+	if d := s.cfg.Limiter.Allow(context.Background(), global, n); !d.Allow {
+		return d
+	}
+	session := glimit.Key{Kind: glimit.KindBytes, Scope: glimit.ScopeSession, ID: sess.ID, Direction: dir}
+	return s.cfg.Limiter.Allow(context.Background(), session, n)
+}
+
+// admitFrame charges one inbound frame for a session.
+func (s *Server) admitFrame(sess *Session) glimit.Decision {
+	if s.cfg.Limiter == nil {
+		return glimit.Decision{Allow: true}
+	}
+	global := glimit.Key{Kind: glimit.KindRequests, Scope: glimit.ScopeGlobal, Direction: glimit.DirIn}
+	if d := s.cfg.Limiter.Allow(context.Background(), global, 1); !d.Allow {
+		return d
+	}
+	session := glimit.Key{Kind: glimit.KindRequests, Scope: glimit.ScopeSession, ID: sess.ID, Direction: glimit.DirIn}
+	return s.cfg.Limiter.Allow(context.Background(), session, 1)
+}
+
+// deny closes a session a limit refused, after offering the protocol a chance
+// to render a refusal frame.
+func (s *Server) deny(sess *Session, d glimit.Decision) {
+	if s.cfg.Rejecter != nil {
+		s.cfg.Rejecter.Reject(context.Background(), sess, d)
+	}
+	sess.closeWith(limitReason(d.Reason))
+}
+
+// reject refuses a connection before it becomes a session: it counts the
+// rejection, offers the protocol a refusal frame and closes the connection.
+func (s *Server) reject(conn net.Conn, d glimit.Decision) {
+	s.metric().SessionRejected(s.transport(), limitReason(d.Reason))
+	if s.cfg.Rejecter != nil {
+		sess := s.newSession(conn)
+		s.cfg.Rejecter.Reject(context.Background(), sess, d)
+		_ = sess.Close()
+	}
+	_ = conn.Close()
+}
+
+// forgetConn drops a raw connection and returns the credit it held.
+func (s *Server) forgetConn(conn net.Conn) {
+	s.mu.Lock()
+	delete(s.conns, conn)
+	credit := s.limits[conn]
+	delete(s.limits, conn)
+	s.mu.Unlock()
+	s.release(credit)
+}
+
+// limitReason maps a limiter denial onto the coarse metric vocabulary. The
+// built-in counter keeps its historical name, so an existing alert still fires.
+func limitReason(r glimit.Reason) string {
+	switch r {
+	case glimit.ReasonRate:
+		return ReasonRateLimited
+	case glimit.ReasonBurst:
+		return ReasonBurstLimited
+	case glimit.ReasonBytes:
+		return ReasonByteLimited
+	case glimit.ReasonConcurrency:
+		return ReasonMaxSessions
+	case glimit.ReasonQuota:
+		return ReasonQuotaExceeded
+	case glimit.ReasonOverload:
+		return ReasonOverloaded
+	case glimit.ReasonUnavailable:
+		return ReasonUnavailable
+	default:
+		return ReasonRateLimited
 	}
 }

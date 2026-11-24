@@ -23,4 +23,10 @@ const (
 	ReasonHeartbeatTimeout = hook.ReasonHeartbeatTimeout
 	ReasonShutdown         = hook.ReasonShutdown
 	ReasonMaxSessions      = hook.ReasonMaxSessions
+	ReasonRateLimited      = hook.ReasonRateLimited
+	ReasonBurstLimited     = hook.ReasonBurstLimited
+	ReasonByteLimited      = hook.ReasonByteLimited
+	ReasonQuotaExceeded    = hook.ReasonQuotaExceeded
+	ReasonOverloaded       = hook.ReasonOverloaded
+	ReasonUnavailable      = hook.ReasonUnavailable
 )

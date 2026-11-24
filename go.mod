@@ -3,6 +3,7 @@ module github.com/maxid/gnety
 go 1.27
 
 require (
+	github.com/maxid/glimit v0.0.0-20261124100600-ce8dcbde2d34
 	github.com/pion/dtls/v2 v2.2.12
 	golang.org/x/sys v0.49.0
 )

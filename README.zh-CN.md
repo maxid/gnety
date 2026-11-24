@@ -40,6 +40,7 @@ gnety 是一个**框架**，以易用性和协议基座为定位：
 **计划中 / 进行中**
 
 - 限制/超时：`MaxSessions`、`MaxPendingRequests`、`WriteTimeout`、`ShutdownTimeout`；显式的 DTLS `InsecureSkipVerify`
+- 可选的准入控制：`glimit` 门（`Config.Limiter`）与协议级拒绝（`Config.Rejecter`）；见[限流与准入](#限流与准入)
 - 服务端引导（已完成）；客户端连接器（TCP/UDP/TCP-TLS/WS/WSS/DTLS，已完成）；重连/背压（路线图）
 - 可组合的流水线/中间件（`Chain`、`Recover` 等）
 - TLS / WebSocket / WSS / DTLS（服务端 + 客户端），支持文件配置或内存态 `*tls.Config`/`*dtls.Config`
@@ -229,6 +230,35 @@ srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: codec, Ha
 ```go
 n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
+
+## 限流与准入
+
+内建旋钮（`MaxSessions`、`MaxQueuedWrites`、`MaxPendingRequests`、写超时）不变。需要更多时——per-peer
+连接数、accept 速率、每会话的字节或帧速率——把 `Config.Limiter` 设成一个
+[`glimit`](https://github.com/maxid/glimit) 门：
+
+```go
+gate, _ := glimit.Compile(glimit.Spec{Policies: []glimit.Policy{
+    {Kind: glimit.KindConnections, Scope: glimit.ScopeGlobal, Max: 5000},
+    {Kind: glimit.KindConnections, Scope: glimit.ScopePeer, Max: 32},
+    {Kind: glimit.KindBytes, Scope: glimit.ScopeSession, Dir: glimit.DirIn, Rate: 1 << 20},
+}})
+srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: gnety.LineCodec{}, Limiter: gate})
+```
+
+两层都必须放行——内建检查与 limiter——`nil` 时行为与之前完全一致。准入是二元的：gnety 不靠 sleep 整形。
+写超出字节速率返回 `ErrRateLimited`；读或帧超限则关闭会话，reason 为 `byte_limited` / `rate_limited`。
+
+`Config.Rejecter` 让协议库在关闭前回一帧——gnety 不知道协议自己的拒绝格式：
+
+```go
+type Rejecter interface {
+	Reject(ctx context.Context, sess *gnety.Session, d glimit.Decision) bool
+}
+```
+
+`Session.WriteRaw` 在正常的写门限下写出已编码的拒绝帧。未注册 Rejecter 时直接关闭。限流是准入而非
+整形：想要延迟而不是拒绝的协议库保留自己的整形器。
 
 ## 扩展点
 

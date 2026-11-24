@@ -43,6 +43,7 @@ Rules:
 **Planned / in progress**
 
 - limits/timeouts: `MaxSessions`, `MaxPendingRequests`, `WriteTimeout`, `ShutdownTimeout`; explicit DTLS `InsecureSkipVerify`
+- opt-in admission control through a `glimit` gate (`Config.Limiter`) and protocol-level refusals (`Config.Rejecter`); see [Limits and admission](#limits-and-admission)
 - server bootstrap (done); client connector (TCP/UDP/TCP-TLS/WS/WSS/DTLS, done); reconnect/backpressure (roadmap)
 - composable pipeline/middleware (`Chain`, `Recover`, ...)
 - TLS / WebSocket / WSS / DTLS (server + client), from files or an in-memory `*tls.Config`/`*dtls.Config`
@@ -237,6 +238,39 @@ Broadcast:
 ```go
 n := srv.Broadcast([]byte("{\"type\":\"ping\"}"))
 ```
+
+## Limits and admission
+
+The built-in knobs (`MaxSessions`, `MaxQueuedWrites`, `MaxPendingRequests`, write timeouts) are
+unchanged. When more is needed — a per-peer connection cap, an accept rate, a byte or frame rate per
+session — set `Config.Limiter` to a [`glimit`](https://github.com/maxid/glimit) gate:
+
+```go
+gate, _ := glimit.Compile(glimit.Spec{Policies: []glimit.Policy{
+    {Kind: glimit.KindConnections, Scope: glimit.ScopeGlobal, Max: 5000},
+    {Kind: glimit.KindConnections, Scope: glimit.ScopePeer, Max: 32},
+    {Kind: glimit.KindBytes, Scope: glimit.ScopeSession, Dir: glimit.DirIn, Rate: 1 << 20},
+}})
+srv, _ := gnety.New(gnety.Config{Network: "tcp", Addr: ":9000", Codec: gnety.LineCodec{}, Limiter: gate})
+```
+
+Both layers must admit — the built-in check and the limiter — and `nil` keeps the previous behaviour
+exactly. Admission is binary: gnety never sleeps to shape traffic. A write over its byte rate returns
+`ErrRateLimited`; a read or a frame over its rate closes the session with the `byte_limited` or
+`rate_limited` reason.
+
+`Config.Rejecter` lets a protocol library answer before the close, since gnety does not know the wire
+format of a refusal:
+
+```go
+type Rejecter interface {
+	Reject(ctx context.Context, sess *gnety.Session, d glimit.Decision) bool
+}
+```
+
+`Session.WriteRaw` writes the encoded refusal under the normal write gate. With no rejecter the
+connection is simply closed. Limits are admission, not shaping: a protocol library that wants to delay
+instead of reject keeps its own shaper.
 
 ## Extension points
 

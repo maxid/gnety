@@ -34,6 +34,10 @@ Server
 ## 限制与超时
 
 - `MaxSessions` 在 accept/WS/DTLS 跟踪连接前执行；UDP peer 使用同一上限。
+- `Config.Limiter`（`glimit` 门）与每一道内建限制叠加：accept 时的连接计数与 accept 速率、会话上的字节与帧速率。
+  两层都必须放行，`nil` 时内建行为完全不变。
+- 准入是二元的：gnety 不靠 sleep 或排队整形。写超出字节速率返回 `ErrRateLimited`；读或帧超出速率则关闭会话并记录对应 reason。
+- `Config.Rejecter` 可以在限流关闭连接或会话前回一帧协议级拒绝，`Session.WriteRaw` 负责写出且不重复计费；拒绝帧的形状属于协议状态机，所以这里是钩子而不是 gnety 的决定。
 - `MaxPendingRequests` 限制 per-session 请求关联；超限返回 `ErrTooManyPending`。
 - `WriteTimeout` 作用于 Session/Client 写；超时返回 `ErrWriteTimeout`。
 - `ShutdownTimeout` 限制 Stop；超时返回 `ErrShutdownTimeout`。

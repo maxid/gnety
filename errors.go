@@ -15,4 +15,8 @@ var (
 	ErrWriteBusy = errors.New("gnety: write queue full")
 	// ErrShutdownTimeout is returned when Stop exceeds ShutdownTimeout.
 	ErrShutdownTimeout = errors.New("gnety: shutdown timeout")
+	// ErrRateLimited is returned when the shared limiter refuses a write, a
+	// read or a frame; the wrapped text names the reason. A read denial closes
+	// the session with the matching metric reason.
+	ErrRateLimited = errors.New("gnety: rate limited")
 )

@@ -13,6 +13,13 @@
 
 ### 新增
 
+- **通过 `glimit` 做准入控制。** `Config.Limiter` 与每一道内建限制叠加：accept 时的连接计数与 accept
+  速率、会话上的字节与帧速率，peer 取远端主机部分。两层都必须放行，`nil` 时行为不变。拒绝映射到既有指标
+  词表（计数器仍是 `max_sessions`，另有 `rate_limited`、`burst_limited`、`byte_limited`、
+  `quota_exceeded`、`overloaded`、`unavailable`）。
+- `Config.Rejecter` 与 `Session.WriteRaw`：协议库可以在限流关闭连接或会话之前回一帧自己的拒绝
+  （CONNACK、5.03、异常码）。
+- `ErrRateLimited`：写超出字节速率时返回它而不是被整形；读或帧超限则关闭会话并记录对应 reason。
 - `hook.MetricsFuncs`：用可选函数字段实现六个指标方法，nil 字段直接跳过。
 
 - `codec/coap`：新增 `CodeRequestEntityIncomplete`（4.08）与 `CodeConflict`（4.09）；前者用于应答分块请求体中缺块或乱序的 Block1 上传（RFC 7959）。

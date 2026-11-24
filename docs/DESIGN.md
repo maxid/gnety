@@ -52,6 +52,14 @@ Server
 ## Limits and timeouts
 
 - `MaxSessions` is enforced at accept/WS/DTLS before a connection is tracked; UDP peers use the same cap.
+- `Config.Limiter` (a `glimit` gate) is consulted in addition to every built-in bound: the connection gauge
+  and the accept rate at accept time, byte and frame rates on a session. Both layers must admit, so a nil
+  limiter keeps the built-in behaviour exactly.
+- Admission is binary: gnety never sleeps or queues to shape traffic. A write over its byte rate returns
+  `ErrRateLimited`; a read or frame over its rate closes the session with the matching reason.
+- `Config.Rejecter` may render a protocol refusal before a limit closes a connection or session, and
+  `Session.WriteRaw` writes it without charging the limits again. Protocol state machines own the shape
+  of their refusal, so this is a hook rather than a gnety decision.
 - `MaxPendingRequests` bounds per-session request correlation; over-limit returns `ErrTooManyPending`.
 - `WriteTimeout` applies to Session/Client writes; timeout returns `ErrWriteTimeout`.
 - `ShutdownTimeout` bounds Stop; timeout returns `ErrShutdownTimeout`.

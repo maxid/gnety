@@ -14,6 +14,16 @@
 
 ### Added
 
+- **Admission control through `glimit`.** `Config.Limiter` is consulted in addition to every built-in
+  bound — the connection gauge and accept rate at accept time, byte and frame rates per session, with
+  the peer taken from the remote host. Both layers must admit and a nil limiter changes nothing.
+  Denials map onto the existing metric vocabulary (`max_sessions` for a counter, plus `rate_limited`,
+  `burst_limited`, `byte_limited`, `quota_exceeded`, `overloaded`, `unavailable`).
+- `Config.Rejecter` and `Session.WriteRaw`: a protocol library can render its own refusal frame
+  (CONNACK, 5.03, an exception code) before a limit closes the connection or session.
+- `ErrRateLimited`: a write over its byte rate fails with it instead of being shaped; a read or frame
+  over its rate closes the session with the matching reason.
+
 - `hook.MetricsFuncs`: implement the six metrics methods with optional function fields; a
   nil field is skipped.
 

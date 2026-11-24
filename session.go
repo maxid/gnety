@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/maxid/glimit"
 	ws "github.com/maxid/gnety/codec/http/websocket"
 	"github.com/maxid/gnety/codec/wire"
 )
@@ -77,6 +78,15 @@ func (h HandlerFuncs) OnClose(s *Session, err error) {
 	}
 }
 
+// Rejecter renders a protocol-level refusal before the server closes a
+// connection or a session for a limit. A protocol library owns the wire format,
+// so it registers one on its server; returning false or leaving the hook nil
+// closes without a frame. Reject is best effort and bounded by WriteTimeout;
+// use Session.WriteRaw so the refusal does not charge the limits again.
+type Rejecter interface {
+	Reject(ctx context.Context, sess *Session, decision glimit.Decision) bool
+}
+
 // Session is one TCP connection or one UDP peer.
 type Session struct {
 	ID         string
@@ -85,6 +95,9 @@ type Session struct {
 	srv      *Server
 	conn     net.Conn
 	datagram bool
+	// limitKeys is the credit this session holds in the configured Limiter; it
+	// is returned exactly once, when the session closes for any reason.
+	limitKeys []glimit.Key
 
 	writeMu sync.Mutex
 	attrs   sync.Map
@@ -140,6 +153,9 @@ func (s *Session) Send(msg any) error {
 			if err != nil {
 				return err
 			}
+			if d := s.srv.admitBytes(s, glimit.DirOut, len(raw)); !d.Allow {
+				return rateError(d)
+			}
 			_, err = s.conn.Write(raw)
 			return s.finishWrite(err)
 		}
@@ -149,6 +165,9 @@ func (s *Session) Send(msg any) error {
 		}
 		if err := s.srv.cfg.Codec.Encode(&buf, msg); err != nil {
 			return err
+		}
+		if d := s.srv.admitBytes(s, glimit.DirOut, buf.Len()); !d.Allow {
+			return rateError(d)
 		}
 		_, err := s.conn.Write(buf.Bytes())
 		return s.finishWrite(err)
@@ -160,8 +179,52 @@ func (s *Session) Send(msg any) error {
 	if err != nil {
 		return err
 	}
+	if d := s.srv.admitBytes(s, glimit.DirOut, len(b)); !d.Allow {
+		return rateError(d)
+	}
 	_, err = s.srv.pc.WriteTo(b, s.RemoteAddr)
 	return s.finishWrite(err)
+}
+
+// WriteRaw writes already-encoded bytes to the peer with the same write gate,
+// mutex and deadline as Send, but without a codec and without charging the
+// limits again. A Rejecter uses it to render a refusal frame.
+func (s *Session) WriteRaw(b []byte) error {
+	if s.closed.Load() {
+		return ErrSessionClosed
+	}
+	if s.writeSem != nil {
+		select {
+		case s.writeSem <- struct{}{}:
+			defer func() { <-s.writeSem }()
+		default:
+			s.srv.metric().WriteFailed(s.srv.transport(), ReasonBackpressure)
+			return ErrWriteBusy
+		}
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.conn != nil {
+		if timeout := s.srv.cfg.WriteTimeout; timeout > 0 {
+			_ = s.conn.SetWriteDeadline(time.Now().Add(timeout))
+			defer func() { _ = s.conn.SetWriteDeadline(time.Time{}) }()
+		}
+		_, err := s.conn.Write(b)
+		return s.finishWrite(err)
+	}
+	if s.srv.pc == nil {
+		return errors.New("gnety: no UDP packet connection configured")
+	}
+	_, err := s.srv.pc.WriteTo(b, s.RemoteAddr)
+	return s.finishWrite(err)
+}
+
+// rateError wraps a denial so a caller can test for it and read the reason.
+func rateError(d glimit.Decision) error {
+	if d.Reason == "" {
+		return ErrRateLimited
+	}
+	return fmt.Errorf("%w: %s", ErrRateLimited, d.Reason)
 }
 
 // finishWrite classifies a write result and records the outcome.
@@ -343,6 +406,7 @@ func (s *Session) closeOnceWith(err error) {
 		s.pendingMu.Unlock()
 		s.srv.metric().SessionClose(s.srv.transport(), s.closeReason(err))
 		s.srv.cfg.Handler.OnClose(s, err)
+		s.srv.release(s.limitKeys)
 	})
 }
 

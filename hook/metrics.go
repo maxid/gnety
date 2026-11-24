@@ -21,6 +21,16 @@ const (
 	ReasonHeartbeatTimeout = "heartbeat_timeout"
 	ReasonShutdown         = "shutdown"
 	ReasonMaxSessions      = "max_sessions"
+
+	// Reasons below name a denial by the shared limiter (see
+	// github.com/maxid/glimit). max_sessions keeps its historical name so an
+	// existing alert still fires for the built-in and the limiter counter alike.
+	ReasonRateLimited   = "rate_limited"
+	ReasonBurstLimited  = "burst_limited"
+	ReasonByteLimited   = "byte_limited"
+	ReasonQuotaExceeded = "quota_exceeded"
+	ReasonOverloaded    = "overloaded"
+	ReasonUnavailable   = "unavailable"
 )
 
 // Metrics receives transport-level events. Implementations must be safe for
